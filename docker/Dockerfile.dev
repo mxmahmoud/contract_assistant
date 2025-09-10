@@ -1,0 +1,63 @@
+#FROM python:3.11-slim-bookworm
+FROM paddlepaddle/paddle:3.2.0-gpu-cuda12.6-cudnn9.5
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH="/app" \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=false \
+    POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_HOME="/opt/poetry" \
+    POETRY_VERSION=2.1.4 \
+    PATH="$POETRY_HOME/bin:$PATH" 
+
+# Set the working directory
+WORKDIR /app
+
+RUN apt-get update && \
+    export DEBIAN_FRONTEND=noninteractive && \
+    apt-get install --no-install-recommends -y \
+        software-properties-common \
+        curl \
+        build-essential \
+        git \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        tesseract-ocr \
+        poppler-utils \
+        libffi-dev \
+        libssl-dev \
+        pkg-config \
+        libxml2-dev \
+        libxslt1-dev \
+        zlib1g-dev \
+        libjpeg-dev \
+        libpng-dev \
+        gnupg2 \
+        ca-certificates && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -rf /usr/lib/python3/dist-packages/blinker && \
+    rm -rf /usr/lib/python3/dist-packages/blinker-1.4.egg-info 
+
+#RUN pip install --upgrade pip && \
+RUN pip install "poetry==$POETRY_VERSION" && \
+    echo 'export PATH="$POETRY_HOME/bin:$PATH"' > ~/.bashrc 
+    #echo 'export PATH="$POETRY_HOME/bin:$PATH"' > /etc/profile.d/poetry.sh
+    
+#RUN curl -sSL https://install.python-poetry.org | python3 -
+#    echo 'export PATH="/root/.local/bin:$PATH"' > ~/.bashrc
+
+# Copy dependency definition files first for better caching #poetry.lock 
+COPY pyproject.toml ./ 
+
+# Update lock file and install ALL dependencies including dev dependencies for development
+RUN poetry install --no-root
+
+# Command to run the Streamlit application with auto-reload
+CMD ["sh", "-c", "poetry run streamlit run main.py --server.port=${APP_PORT:-8501} --server.address=${APP_HOST:-0.0.0.0} --server.runOnSave=true"]
+#CMD ["tail", "-f", "/dev/null"]

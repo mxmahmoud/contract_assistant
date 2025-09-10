@@ -1,0 +1,122 @@
+# ca_core/vectorstore.py
+import chromadb
+import logging
+from typing import List
+from langchain_core.documents import Document
+from langchain_core.vectorstores import VectorStoreRetriever
+from langchain_openai import OpenAIEmbeddings
+from langchain_chroma import Chroma
+from utility.config import settings
+from ca_core.exceptions import VectorStoreError
+import streamlit as st
+
+logger = logging.getLogger(__name__)
+
+@st.cache_resource
+def get_embedding_function() -> OpenAIEmbeddings:
+    """Initializes and returns the embedding function based on settings.
+    
+    Returns:
+        OpenAIEmbeddings instance configured with current settings
+        
+    Raises:
+        VectorStoreError: If embedding function initialization fails
+    """
+    try:
+        return OpenAIEmbeddings(
+            model=settings.embeddings_model,
+            openai_api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+            model_kwargs={"encoding_format": "float"},
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize embedding function: {e}", exc_info=True)
+        raise VectorStoreError(f"Failed to initialize embedding function: {e}") from e
+
+@st.cache_resource
+def get_vector_store_retriever(contract_id: str | None = None) -> VectorStoreRetriever:
+    """
+    Initializes and returns a ChromaDB vector store retriever.
+
+    Args:
+        contract_id (optional): The ID of the contract to filter by.
+
+    Returns:
+        A retriever configured for MMR search and optional filtering.
+    """
+    client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
+    embedding_function = get_embedding_function()
+    
+    db = Chroma(
+        client=client,
+        collection_name="contract_assistant_collection",
+        embedding_function=embedding_function,
+        persist_directory=settings.CHROMA_PERSIST_DIR,
+    )
+    
+    search_kwargs = {"k": 5}
+    if contract_id:
+        search_kwargs["filter"] = {"contract_id": contract_id}
+        
+    retriever = db.as_retriever(
+        search_type="mmr",
+        search_kwargs=search_kwargs
+    )
+    logger.info(f"ChromaDB retriever initialized. Filtered by contract_id: {contract_id or 'None'}")
+    return retriever
+
+
+def add_chunks_to_vector_store(chunks: List[Document]):
+    """
+    Adds document chunks to the persistent ChromaDB vector store.
+    
+    Args:
+        chunks: A list of LangChain Document objects.
+        
+    Raises:
+        VectorStoreError: If chunks cannot be added to the vector store
+    """
+    if not chunks:
+        logger.warning("No chunks provided to add to vector store")
+        return
+        
+    try:
+        client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
+        embedding_function = get_embedding_function()
+
+        # Use a stable document id per chunk to enable upsert and prevent duplicates
+        ids = [doc.metadata.get("chunk_id") or doc.page_content[:32] for doc in chunks]
+
+        documents = [d.page_content for d in chunks]
+        metadatas = [d.metadata for d in chunks]
+
+        db = Chroma(
+            client=client,
+            collection_name="contract_assistant_collection",
+            embedding_function=embedding_function,
+            persist_directory=settings.CHROMA_PERSIST_DIR,
+        )
+
+        # Upsert ensures re-processing the same PDF won't duplicate entries
+        try:
+            # Precompute embeddings for private API upsert
+            embeddings = embedding_function.embed_documents(documents)
+            db._collection.upsert(
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+                embeddings=embeddings,
+            )
+            logger.info(f"Upserted {len(chunks)} chunks to ChromaDB using private API with precomputed embeddings")
+        except Exception as e:
+            logger.warning(f"Private API upsert failed, falling back to add_documents: {e}")
+            # Fallback if private API changes; public API computes embeddings via the wrapper
+            db.add_documents(documents=chunks, ids=ids)
+            logger.info(f"Added {len(chunks)} chunks to ChromaDB using public API")
+
+        logger.info(f"Successfully persisted {len(chunks)} chunks to ChromaDB")
+        
+    except Exception as e:
+        error_msg = f"Failed to add chunks to vector store: {e}"
+        logger.error(error_msg, exc_info=True)
+        raise VectorStoreError(error_msg) from e

@@ -1,0 +1,29 @@
+# Production override for docker-compose.base.yml
+# This file extends the base configuration with production-specific settings
+
+services:
+  app:
+    image: ca_app_prod
+    container_name: ca_app_prod
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.prod
+    environment:
+      - DEBUG=false
+      - ENVIRONMENT=production
+    volumes:
+      - ./:/app
+      - chroma_data:/app/data/chroma_data
+    restart: unless-stopped
+
+  litellm:
+    container_name: ca_litellm_prod
+    restart: unless-stopped
+
+  ollama:
+    container_name: ca_ollama_prod
+    restart: unless-stopped
+
+  tei:
+    container_name: ca_tei_prod
+    restart: unless-stopped

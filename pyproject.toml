@@ -1,0 +1,49 @@
+[tool.poetry]
+name = "contract-assistant"
+version = "0.1.0"
+description = "An intelligent assistant for querying and analyzing legal contracts."
+authors = ["Mustafa Mahmoud <mustafaxmahmoud@gmail.com>"]
+readme = "README.md"
+packages = [{include = "ca_core"}, {include = "cli"}, {include = "utility"}]
+
+[tool.poetry.dependencies]
+python = ">=3.10, <3.13"
+langchain = "^0.3.27"
+langchain-openai = "^0.3.30"
+openai = "^1.99.9"
+pypdf = "^6.0.0"
+chromadb = "^1.0.17"
+streamlit = "^1.48.1"
+typer = {extras = ["rich"], version = "^0.16.0"}
+pydantic-settings = "^2.10.1"
+python-dotenv = "^1.1.1"
+langchain-community = "^0.3.27"
+langchain-chroma = "^0.2.5"
+xx-ent-wiki-sm = {url = "https://github.com/explosion/spacy-models/releases/download/xx_ent_wiki_sm-3.8.0/xx_ent_wiki_sm-3.8.0.tar.gz"}
+pymupdf = "^1.26.4"
+paddleocr =  "^3.2.0"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.4.5"
+black = "^24.4.2"
+isort = "^5.13.2"
+pytest = "^8.2.1"
+pre-commit = "^3.7.1"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+[tool.ruff]
+line-length = 88
+select = ["E", "F", "I", "W", "C90", "N", "UP", "B", "A", "C4"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.isort]
+profile = "black"
+line_length = 88

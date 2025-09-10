@@ -1,0 +1,29 @@
+model_list:
+  - model_name: ${LOCAL_LLM_ALIAS}
+    litellm_params:
+      #model: ${LOCAL_LLM_MODEL}
+      model: ${CUSTOM_LLM_PROVIDER}/${LOCAL_LLM_MODEL}
+      api_base: http://${OLLAMA_HOST}:${OLLAMA_PORT}
+      custom_llm_provider: ${CUSTOM_LLM_PROVIDER}
+  - model_name: ${LOCAL_EMBEDDINGS_ALIAS}
+    litellm_params:
+      # Tell LiteLLM to use OpenAI-compatible embeddings to our TEI
+      model: ${LOCAL_EMBEDDINGS_PROVIDER}/${LOCAL_EMBEDDINGS_MODEL}
+      api_base: http://${TEI_HOST}:${TEI_PORT}/v1
+      # OpenAI provider requires a key header; TEI will ignore it.
+      api_key: ${OPENAI_API_KEY:-sk-noop}
+    model_info:
+      mode: embedding
+      # embedding_adapter: "bge-small"
+
+router_settings:
+  model_group_alias:
+    ${OPENAI_EMBEDDINGS_MODEL}: ${LOCAL_EMBEDDINGS_ALIAS}
+
+litellm_settings:
+  debug: ${DEBUG}
+  drop_params: true
+  general_settings:
+    background_health_checks: true
+    health_check_interval: 300
+    health_check_details: false

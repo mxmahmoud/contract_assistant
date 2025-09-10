@@ -1,0 +1,58 @@
+# Development override for docker-compose.base.yml
+# This file extends the base configuration with development-specific settings
+
+services:
+  app:
+    image: ca_app_dev:latest
+    container_name: ca_app_dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    environment:
+      - DEBUG=true
+      - ENVIRONMENT=development
+    volumes:
+      # Mount source code for hot reloading during development
+      - ../:/app
+      - chroma_data:/app/data/chroma_data
+    # Remove health check dependency for faster startup during development
+    depends_on:
+      - litellm
+      - ollama
+      - tei
+    # Override health check to be less strict during development
+    healthcheck:
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
+  litellm:
+    container_name: ca_litellm_dev
+    # Remove health check dependency for faster startup
+    depends_on:
+      - ollama
+      - tei
+    # More lenient health check for development
+    healthcheck:
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+
+  ollama:
+    container_name: ca_ollama_dev
+    # More lenient health check for development
+    healthcheck:
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 180s
+  tei:
+    container_name: ca_tei_dev
+    # More lenient health check for development
+    healthcheck:
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 180s

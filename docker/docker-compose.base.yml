@@ -1,0 +1,145 @@
+# Base Docker Compose configuration for Contract Assistant
+# This file contains common service definitions shared between dev and prod environments
+
+services:
+  app:
+    build:
+      context: ..
+    ports:
+      - "${APP_PORT:-8501}:${APP_PORT:-8501}"
+    volumes:
+      - chroma_data:/app/data/chroma_data
+    env_file:
+      - ../.env
+    depends_on:
+      litellm:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      tei:
+        condition: service_healthy
+    networks:
+      - contract-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://${APP_HOST:-localhost}:${APP_PORT:-8501}/_stcore/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    # GPU support - uncomment if you have NVIDIA GPU
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.74.15-stable
+    ports:
+      - "${LITELLM_PORT:-4000}:${LITELLM_PORT:-4000}"
+    volumes:
+      - ../utility/litellm.config.template.yaml:/app/utility/litellm.config.template.yaml:ro
+      - ../utility/render_litellm_config.py:/app/render_litellm_config.py:ro
+      - ./entryshell_scripts/litellm.sh:/entry.sh:ro
+    entrypoint: ["/bin/sh", "/entry.sh"]
+    env_file:
+      - ../.env
+    depends_on:
+      ollama:
+        condition: service_healthy
+      tei:
+        condition: service_healthy
+    networks:
+      - contract-net
+    healthcheck:
+      test: ["CMD-SHELL", "python - <<'PY'\nimport sys,urllib.request;\nurl='http://'+('${LITELLM_HOST:-localhost}')+':'+('${LITELLM_PORT:-4000}')+'/health/readiness';\ntry:\n  r=urllib.request.urlopen(url,timeout=5);\n  sys.exit(0 if r.getcode()==200 else 1)\nexcept Exception:\n  sys.exit(1)\nPY"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  ollama:
+    image: ollama/ollama:0.11.5-rc2
+    ports:
+      - "${OLLAMA_PORT:-11434}:${OLLAMA_PORT:-11434}"
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./entryshell_scripts/ollama.sh:/entry.sh:ro
+    env_file:
+      - ../.env
+    networks:
+      - contract-net
+    entrypoint: ["/bin/sh", "/entry.sh"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+    # GPU support - uncomment if you have NVIDIA GPU
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:89-1.8 #(currently set for RTX4000 series) use cpu-1.8 if you have no GPU
+    ports:
+      - "${TEI_PORT:-8504}:${TEI_PORT:-8504}"
+    volumes:
+      - tei_data:/data
+      - ./entryshell_scripts/tei.sh:/entry.sh:ro
+    env_file:
+      - ../.env
+    networks:
+      - contract-net
+    entrypoint: ["/bin/sh", "/entry.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://${TEI_HOST:-localhost}:${TEI_PORT:-8504}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    # GPU support - uncomment if you have NVIDIA GPU
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+volumes:
+  chroma_data:
+    driver: local
+    driver_opts:
+      type: 'none'
+      o: 'bind'
+      device: '../${CHROMA_PERSIST_DIR:-data/chroma_data}'
+  ollama_data:
+    driver: local
+    driver_opts:
+      type: 'none'
+      o: 'bind'
+      device: '../${OLLAMA_PERSIST_DIR:-data/weights/ollama_data}'
+  tei_data:
+    driver: local
+    driver_opts:
+      type: 'none'
+      o: 'bind'
+      device: '../${TEI_PERSIST_DIR:-data/weights/tei_data}'
+
+networks:
+  contract-net:
+    driver: bridge
+    name: ${DOCKER_NETWORK_NAME:-contract-net}

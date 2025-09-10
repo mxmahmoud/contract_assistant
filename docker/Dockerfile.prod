@@ -1,0 +1,45 @@
+FROM python:3.11-slim-bookworm
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=false \
+    POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_HOME="/opt/poetry" \
+    POETRY_VERSION=2.1.4
+
+# Set the working directory
+WORKDIR /app
+
+# Install system dependencies and poetry in one layer
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y \
+        curl \
+        build-essential \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        tesseract-ocr \
+        poppler-utils \
+    && curl -sSL https://install.python-poetry.org | python3 - \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN ln -sf /opt/poetry/bin/poetry /usr/local/bin/poetry
+
+ENV PATH="$POETRY_HOME/bin:$PATH"
+
+# Copy dependency definition files first for better caching
+COPY pyproject.toml poetry.lock ./
+
+# Install project dependencies (production only)
+RUN poetry install --no-root
+
+# Copy application code
+COPY . .
+
+# Command to run the Streamlit application
+CMD ["sh", "-c", "poetry run streamlit run main.py --server.port=${APP_PORT:-8501} --server.address=${APP_HOST:-0.0.0.0}"]
