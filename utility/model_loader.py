@@ -69,6 +69,7 @@ def ensure_model_is_loaded():
                                 status_placeholder.empty()
                                 st.toast("LLM model is ready.", icon="✅")
                                 st.session_state["_ollama_model_ready"] = True
+                                st.rerun()
                                 return
                     except requests.exceptions.RequestException as e:
                         logger.debug(f"Ollama health check failed: {e}")

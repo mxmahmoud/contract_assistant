@@ -13,6 +13,11 @@ import streamlit as st
 logger = logging.getLogger(__name__)
 
 @st.cache_resource
+def get_chroma_client() -> chromadb.PersistentClient:
+    """Initializes and returns a persistent ChromaDB client."""
+    return chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
+
+@st.cache_resource
 def get_embedding_function() -> OpenAIEmbeddings:
     """Initializes and returns the embedding function based on settings.
     
@@ -34,6 +39,20 @@ def get_embedding_function() -> OpenAIEmbeddings:
         raise VectorStoreError(f"Failed to initialize embedding function: {e}") from e
 
 @st.cache_resource
+def get_chroma_db() -> Chroma:
+    """
+    Initializes and returns a Chroma instance, reusing client and embedding function.
+    """
+    client = get_chroma_client()
+    embedding_function = get_embedding_function()
+    
+    return Chroma(
+        client=client,
+        collection_name="contract_assistant_collection",
+        embedding_function=embedding_function,
+        persist_directory=settings.CHROMA_PERSIST_DIR,
+    )
+
 def get_vector_store_retriever(contract_id: str | None = None) -> VectorStoreRetriever:
     """
     Initializes and returns a ChromaDB vector store retriever.
@@ -44,15 +63,7 @@ def get_vector_store_retriever(contract_id: str | None = None) -> VectorStoreRet
     Returns:
         A retriever configured for MMR search and optional filtering.
     """
-    client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
-    embedding_function = get_embedding_function()
-    
-    db = Chroma(
-        client=client,
-        collection_name="contract_assistant_collection",
-        embedding_function=embedding_function,
-        persist_directory=settings.CHROMA_PERSIST_DIR,
-    )
+    db = get_chroma_db()
     
     search_kwargs = {"k": 5}
     if contract_id:
@@ -81,8 +92,7 @@ def add_chunks_to_vector_store(chunks: List[Document]):
         return
         
     try:
-        client = chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
-        embedding_function = get_embedding_function()
+        db = get_chroma_db()
 
         # Use a stable document id per chunk to enable upsert and prevent duplicates
         ids = [doc.metadata.get("chunk_id") or doc.page_content[:32] for doc in chunks]
@@ -90,17 +100,10 @@ def add_chunks_to_vector_store(chunks: List[Document]):
         documents = [d.page_content for d in chunks]
         metadatas = [d.metadata for d in chunks]
 
-        db = Chroma(
-            client=client,
-            collection_name="contract_assistant_collection",
-            embedding_function=embedding_function,
-            persist_directory=settings.CHROMA_PERSIST_DIR,
-        )
-
         # Upsert ensures re-processing the same PDF won't duplicate entries
         try:
             # Precompute embeddings for private API upsert
-            embeddings = embedding_function.embed_documents(documents)
+            embeddings = db.embedding_function.embed_documents(documents)
             db._collection.upsert(
                 ids=ids,
                 documents=documents,
