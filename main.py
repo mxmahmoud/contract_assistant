@@ -2,6 +2,7 @@ import streamlit as st
 import uuid
 import logging
 from typing import Any, Dict, List
+import time
 
 # Set the page to be wide
 st.set_page_config(layout="wide", page_title="Intelligent Contract Assistant")
@@ -10,21 +11,21 @@ st.set_page_config(layout="wide", page_title="Intelligent Contract Assistant")
 from ca_core import registry, extraction, chunking, vectorstore, qa, ner
 from ca_core.feedback import log_feedback
 from ca_core.exceptions import ValidationError
-from utility.model_loader import ensure_model_is_loaded, ensure_tei_is_ready
+from utility.model_loader import check_ollama_status, check_tei_status
 from utility.utility import save_flattened_pdf, get_hash_of_file
 from utility.session_state import (
     get_session_state, 
     update_session_state, 
     reset_contract_state, 
-    add_message,
-    mark_feedback_submitted
+    add_message
 )
-from utility.caching import cache_data
 from utility.config import settings
+from utility.caching import cache_data
 
 logger = logging.getLogger(__name__)
-
 logger.info("Starting Contract Assistant application")
+
+ 
 
 # Initialize session state FIRST (before any other operations)
 def initialize_session_state():
@@ -35,13 +36,21 @@ def initialize_session_state():
 # Call it immediately at module level
 initialize_session_state()
 
-# Model Loading - Now safe to check session state
-# Ensures the required LLM model is downloaded and available if local mode is selected.
-ensure_model_is_loaded()
-ensure_tei_is_ready()
+@cache_data(ttl=settings.DOCUMENT_PROCESSING_CACHE_TTL)
+def extract_pages_cached(pdf_path: str, strategy: str, max_pages: int):
+    """Cached wrapper for pure PDF text extraction."""
+    return extraction.extract_text_from_pdf(
+        pdf_path,
+        strategy=strategy,
+        max_pages=max_pages,
+    )
 
 
 @cache_data(ttl=settings.DOCUMENT_PROCESSING_CACHE_TTL)
+def extract_key_entities_cached(contract_text: str) -> Dict[str, Any]:
+    """Cached wrapper for LLM key-entity extraction on first page text."""
+    return qa.extract_key_entities(contract_text)
+
 def process_document(uploaded_file):
     """
     Handles the ingestion and processing of an uploaded PDF.
@@ -54,21 +63,44 @@ def process_document(uploaded_file):
     """
     logger.info(f"Processing document: {uploaded_file.name}")
     
+    file_bytes = uploaded_file.getvalue()
+    
+    # Validate file size
+    size_mb = len(file_bytes) / (1024 * 1024)
+    if size_mb > settings.MAX_PDF_SIZE_MB:
+        error_msg = f"PDF size {size_mb:.2f}MB exceeds maximum of {settings.MAX_PDF_SIZE_MB}MB"
+        logger.error(error_msg)
+        st.error(error_msg)
+        return
+    
+    logger.debug(f"PDF size: {size_mb:.2f}MB")
+    
+    contract_id = get_hash_of_file(file_bytes)
+    logger.info(f"Generated contract ID: {contract_id}")
+    
+    # Check if contract already exists
+    try:
+        if registry.contract_exists(contract_id):
+            logger.info(f"Contract {contract_id} already exists, loading from cache")
+            with st.spinner("Loading document from cache..."):
+                load_existing_contract(contract_id)
+                
+                # Get contract metadata for display
+                meta = registry.load_contract_meta(contract_id)
+                if meta:
+                    st.success(f"✅ Document '{meta.get('original_filename', 'Unknown')}' loaded successfully!")
+                else:
+                    st.success("✅ Document loaded successfully!")
+            return
+    except Exception as e:
+        logger.error(f"Error during duplicate check: {e}", exc_info=True)
+        st.warning(f"Could not check for duplicates, processing as new document...")
+    
+    # New document - proceed with full processing
     with st.spinner("Processing document... This may take a moment."):
-        file_bytes = uploaded_file.getvalue()
         
-        # Validate file size
-        size_mb = len(file_bytes) / (1024 * 1024)
-        if size_mb > settings.MAX_PDF_SIZE_MB:
-            error_msg = f"PDF size {size_mb:.2f}MB exceeds maximum of {settings.MAX_PDF_SIZE_MB}MB"
-            logger.error(error_msg)
-            raise ValidationError(error_msg)
-        
-        logger.debug(f"PDF size: {size_mb:.2f}MB")
-        
-        contract_id = get_hash_of_file(file_bytes)
         update_session_state(contract_id=contract_id)
-        logger.info(f"Generated contract ID: {contract_id}")
+        logger.info(f"New contract detected, proceeding with processing")
 
         # Save the uploaded file to its permanent location first
         contract_dir = registry._contract_dir(contract_id)
@@ -85,55 +117,19 @@ def process_document(uploaded_file):
         extraction_strategy = "paddleocr" if state.use_ocr else "pypdf2"
         logger.info(f"Extracting text using strategy: {extraction_strategy}")
         
-        doc_pages = extraction.extract_text_from_pdf(
-            str(pdf_path), 
-            strategy=extraction_strategy,
-            max_pages=settings.MAX_PDF_PAGES
+        doc_pages = extract_pages_cached(
+            str(pdf_path),
+            extraction_strategy,
+            settings.MAX_PDF_PAGES,
         )
         
         logger.info(f"Extracted {len(doc_pages)} pages from PDF")
 
-        # Key Entity Extraction (run on all pages)
+        # Unified Entity Extraction delegated to ner module
         if doc_pages:
-            # Extract entities from all pages using NER
-            all_entities = ner.extract_entities(doc_pages)
-            
-            # Also extract key entities from first page using LLM
-            first_page_text = doc_pages[0]["text"]
-            key_entities_data = qa.extract_key_entities(first_page_text)
-            
-            # Transform for display (data-driven approach)
-            entity_mapping = {
-                "parties": "Party",
-                "agreement_date": "Agreement Date",
-                "jurisdiction": "Jurisdiction",
-                "contract_type": "Contract Type",
-                "termination_date": "Termination Date",
-                "monetary_amounts": "Monetary Amount",
-                "key_obligations": "Key Obligation"
-            }
-            display_entities = []
-            for key, label in entity_mapping.items():
-                values = key_entities_data.get(key)
-                if values and values != "Not Found" and values != ["Extraction Failed"]:
-                    # Handle both lists (like parties) and single strings
-                    if isinstance(values, list):
-                        for value in values:
-                            if value != "Extraction Failed":
-                                display_entities.append({"label": label, "value": value, "page": 1})
-                    else:
-                        display_entities.append({"label": label, "value": values, "page": 1})
-            
-            # Add NER-extracted entities from all pages
-            for entity in all_entities:
-                display_entities.append({
-                    "label": entity["label"],
-                    "value": entity["value"],
-                    "page": entity["page"]
-                })
-            
-            update_session_state(entities=display_entities)
-            logger.info(f"Extracted {len(display_entities)} total entities")
+            extracted_entities = ner.extract_entities(doc_pages)
+            update_session_state(entities=extracted_entities)
+            logger.info(f"Extracted {len(extracted_entities)} entities via {settings.NER_STRATEGY.value}")
         else:
             update_session_state(entities=[])
             logger.warning("No pages extracted from PDF")
@@ -168,9 +164,6 @@ def process_document(uploaded_file):
         reset_contract_state()
         st.success("Document processed successfully! You can now ask questions.")
         logger.info(f"Document processing complete for contract {contract_id}")
-        # Rerun to refresh the sidebar entities table immediately
-        st.rerun()
-
 
 def load_existing_contract(contract_id: str):
     """
@@ -241,7 +234,35 @@ def render_chat_history():
                     ), disabled=disable_buttons)
 
 
-# UI Layout
+state = get_session_state()
+if not state.app_initialized:
+    logger.info("First run for this session, performing initial setup (non-blocking)...")
+
+    st.info("🔄 Initializing application, please wait...")
+    st.write(
+        "Connecting to backend services. This may take a moment on first startup as models are downloaded."
+    )
+
+    ollama_ready = check_ollama_status()
+    tei_ready = check_tei_status()
+
+    ollama_status = "✅ Ready" if ollama_ready else "⏳ Downloading/Loading..."
+    tei_status = "✅ Ready" if tei_ready else "⏳ Starting..."
+
+    st.status(
+        f"\n- **LLM Service (Ollama):** {ollama_status}\n- **Embedding Service (TEI):** {tei_status}\n",
+        state="complete" if (ollama_ready and tei_ready) else "running",
+        expanded=True,
+    )
+
+    if ollama_ready and tei_ready:
+        update_session_state(app_initialized=True)
+        logger.info("All services ready. Proceeding to app UI.")
+        st.rerun()
+    else:
+        time.sleep(5)
+        st.rerun()
+
 st.title("📄 Contract Assistant")
 
 # Sidebar: list existing contracts + entity display
@@ -255,9 +276,10 @@ with st.sidebar:
 
         # Auto-load when selection changes
         state = get_session_state()
-        if state.last_sidebar_selection != picked_id:
+        if state.contract_id != picked_id:
             load_existing_contract(picked_id)
             update_session_state(last_sidebar_selection=picked_id)
+            st.rerun()
     else:
         st.info("No ingested contracts yet.")
 
@@ -294,9 +316,23 @@ with main_col:
         state = get_session_state()
         new_contract_id = get_hash_of_file(uploaded_file.getvalue())
         if state.last_processed_id != new_contract_id:
-            # Set last_processed_id first to avoid rerun loops masking chat input
             update_session_state(last_processed_id=new_contract_id)
-            process_document(uploaded_file)
+            try:
+                process_document(uploaded_file)
+            except Exception as e:
+                logger.error("Unhandled error during document processing: %s", e, exc_info=True)
+                st.error(
+                    "An unexpected error occurred while processing the document. "
+                    "Check the application logs for details."
+                )
+                reset_contract_state()
+                update_session_state(
+                    last_processed_id=None,
+                    contract_id=None,
+                    qa_chain=None,
+                    entities=[],
+                )
+            st.rerun()
     
     state = get_session_state()
     if state.qa_chain:

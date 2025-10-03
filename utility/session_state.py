@@ -26,6 +26,9 @@ class SessionState:
     ollama_model_ready: bool = False
     tei_ready: bool = False
     
+    # Application lifecycle
+    app_initialized: bool = False
+    
     # Last selected contract from sidebar
     last_sidebar_selection: Optional[str] = None
 

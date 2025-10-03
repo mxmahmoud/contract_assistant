@@ -1,63 +1,108 @@
 # ca_core/ner.py
 """
-Named Entity Recognition module for contract documents.
+Unified Named Entity Recognition for contract documents.
 
-This module provides lightweight regex-based entity extraction.
-For advanced NER, see ca_core/ner_spacy_archived.py
+Strategy is selected via settings.NER_STRATEGY: 'llm' (default) or 'spacy'.
+In LLM mode, we extract key entities from every page and aggregate results.
+In spaCy mode, we use the archived spaCy pipeline (with monetary regex) across pages.
 """
-import re
 import logging
 from typing import List, Dict, Any
+
+from utility.config import settings, NERStrategy
+from utility.caching import cache_data
 
 logger = logging.getLogger(__name__)
 
 
+# Mapping from LLM key-entities schema to display labels
+LLM_ENTITY_LABELS: Dict[str, str] = {
+    "parties": "Party",
+    "agreement_date": "Agreement Date",
+    "jurisdiction": "Jurisdiction",
+    "contract_type": "Contract Type",
+    "termination_date": "Termination Date",
+    "monetary_amounts": "Monetary Amount",
+    "key_obligations": "Key Obligation",
+}
+
+
+@cache_data(ttl=settings.DOCUMENT_PROCESSING_CACHE_TTL)
+def _extract_key_entities_cached(page_text: str) -> Dict[str, Any]:
+    """Cached LLM-based key entity extraction for a single page of text."""
+    from ca_core import qa  # Local import to avoid heavy import at module import time
+    return qa.extract_key_entities(page_text)
+
+
+def _dedupe_entities(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen = set()
+    unique: List[Dict[str, Any]] = []
+    for e in entities:
+        key = (e.get("label"), e.get("value"), e.get("page"))
+        if key not in seen:
+            unique.append(e)
+            seen.add(key)
+    return unique
+
+
 def extract_entities(pages_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Extracts key entities from the document text using regex patterns.
-    This is a lightweight fallback for basic entity extraction.
+    Extract entities across all pages using the configured strategy.
 
     Args:
-        pages_data: A list of dicts, each with page text and metadata.
+        pages_data: List of dicts, each containing 'text' and 'metadata'.
 
     Returns:
-        A list of dictionaries, each representing an extracted entity.
+        List of entity dicts with keys: 'label', 'value', 'page'.
     """
-    all_entities = []
-    
-    # Define regex patterns for common contract entities
-    patterns = {
-        "Monetary Value": re.compile(r'\$[\d,]+(?:\.\d{2})?\b|\b\d+\s*(?:USD|dollars|Dollars)\b', re.IGNORECASE),
-        "Date": re.compile(r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b|\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b', re.IGNORECASE),
-        "Email": re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
-        "Phone": re.compile(r'\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b'),
-    }
+    if not pages_data:
+        logger.warning("No pages provided to NER extractor")
+        return []
 
-    for page in pages_data:
-        text = page["text"]
-        page_number = page["metadata"]["page_number"]
-        
-        # Extract entities using regex patterns
-        for label, pattern in patterns.items():
-            for match in pattern.finditer(text):
-                all_entities.append({
-                    "value": match.group(0).strip(),
-                    "label": label,
-                    "page": page_number
-                })
+    try:
+        if settings.NER_STRATEGY == NERStrategy.SPACY:
+            from ca_core.ner_spacy import extract_entities_spacy
+            entities = extract_entities_spacy(pages_data)
+            return _dedupe_entities(entities)
 
-    # --- Deduplication ---
-    unique_entities = []
-    seen = set()
-    for entity in all_entities:
-        # Create a unique key for each entity based on value and label
-        entity_key = (entity['value'], entity['label'])
-        if entity_key not in seen:
-            unique_entities.append(entity)
-            seen.add(entity_key)
+        # Default: LLM per page, aggregate
+        aggregated: List[Dict[str, Any]] = []
+        for page in pages_data:
+            page_text = page.get("text", "")
+            page_number = page.get("metadata", {}).get("page_number")
+            if not page_text:
+                continue
+            key_entities = _extract_key_entities_cached(page_text)
+            for key, label in LLM_ENTITY_LABELS.items():
+                values = key_entities.get(key)
+                if not values or values == "Not Found" or values == ["Extraction Failed"]:
+                    continue
+                if isinstance(values, list):
+                    for value in values:
+                        if value != "Extraction Failed":
+                            aggregated.append({
+                                "label": label,
+                                "value": value,
+                                "page": page_number,
+                            })
+                else:
+                    aggregated.append({
+                        "label": label,
+                        "value": values,
+                        "page": page_number,
+                    })
 
-    logger.info(f"Extracted {len(unique_entities)} unique entities using regex patterns.")
-    return unique_entities
+        unique = _dedupe_entities(aggregated)
+        logger.info(
+            "Extracted %d entities via %s",
+            len(unique),
+            settings.NER_STRATEGY.value,
+        )
+        return unique
+
+    except Exception as e:
+        logger.error("Entity extraction failed: %s", e, exc_info=True)
+        return []
 
 
 if __name__ == "__main__":
@@ -65,12 +110,6 @@ if __name__ == "__main__":
     from ca_core import extraction
 
     pdf_path = BASE_DIR / "data" / "examples" / "Annex-1-NDA.pdf"
-    pages_data = extraction.extract_text_from_pdf(pdf_path, strategy="pypdf2")
-    
-    logger.info("=== Regex-based Entity Extraction ===")
+    pages_data = extraction.extract_text_from_pdf(str(pdf_path), strategy="pypdf2")
     entities = extract_entities(pages_data)
-    logger.info(f"Extracted {len(entities)} entities:")
-    for entity in entities[:10]:  # Show first 10
-        logger.info(f"  {entity['label']}: {entity['value']} (page {entity['page']})")
-
-# Note: For advanced spaCy-based NER, see ca_core/ner_spacy_archived.py
+    logger.info("Extracted %d entities (sample): %s", len(entities), entities[:5])

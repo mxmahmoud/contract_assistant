@@ -19,7 +19,8 @@ from utility.config import settings
 logger = logging.getLogger(__name__)
 
 
-# Data-driven router for entity-based questions
+# Entity-based question routing (DISABLED BY DEFAULT)
+# Kept for backward compatibility - can be re-enabled via ENABLE_ENTITY_ROUTING=true
 ENTITY_QUESTION_RULES = [
     {
         "keywords": ["who", "party", "parties", "involved"],
@@ -37,43 +38,30 @@ ENTITY_QUESTION_RULES = [
 
 def answer_from_entities(prompt: str, entities: List[Dict[str, Any]]) -> Optional[str]:
     """
-    Answers questions that can be directly addressed by extracted entities
-    using a data-driven ruleset.
+    Check if question can be answered from extracted entities.
     
-    Special keywords that force full RAG search (bypass entity routing):
-    - "explain"
-    - "detailed"
-    - "context"
-    - "search"
-    - "find"
+    DISABLED BY DEFAULT: Returns None to force full RAG pipeline.
+    Entities are displayed in sidebar, so full RAG provides better answers.
     
-    Example: "explain who signed this contract" will use full RAG instead of entity list
+    To re-enable: Set ENABLE_ENTITY_ROUTING=true in .env
     """
-    prompt_lower = prompt.lower()
+    if not settings.ENABLE_ENTITY_ROUTING:
+        return None  # Use full RAG for all questions
     
-    # Bypass keywords - force full RAG pipeline
-    # Configurable via RAG_BYPASS_KEYWORDS in .env
-    bypass_keywords = [kw.strip() for kw in settings.RAG_BYPASS_KEYWORDS.split(",")]
-    if any(keyword in prompt_lower for keyword in bypass_keywords):
-        logger.debug(f"Bypass keyword detected in prompt, forcing full RAG search")
-        return None  # Skip entity routing, use full RAG
+    # Entity routing enabled - check for matching patterns
+    prompt_lower = prompt.lower()
 
     for rule in ENTITY_QUESTION_RULES:
-        # Check if any keyword is in the prompt
         if any(keyword in prompt_lower for keyword in rule["keywords"]):
-            
-            # Find all matching entities based on labels
             found_values = [
                 f'{e["value"]} (found on page {e["page"]})' if e["label"] in ["Date"] else e["value"]
                 for e in entities if e["label"] in rule["labels"]
             ]
             
             if found_values:
-                # Format the answer using the rule's template
                 formatted_values = "\n* ".join(found_values)
                 return rule["answer_template"].format(formatted_values)
             else:
-                # Return the specific not-found message for that rule
                 return rule["not_found_message"]
 
     return None

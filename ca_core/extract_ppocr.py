@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from ca_core.base import Singleton, ExtractionStrategy
 from ca_core.exceptions import ExtractionError
 from utility.utility import normalize_whitespace_preserve_newlines
+from utility.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -40,17 +41,52 @@ class PaddleOCRProcessor(metaclass=Singleton):
             self.logger.info(f"Initializing new PaddleOCR instance for lang='{lang}'")
             # NOTE: Any additional languages need to be downloaded, e.g., via
             # !python -m paddleocr.download --lang=fr --lang=es
+            desired_device = settings.PADDLE_DEVICE
             try:
                 self._instances[lang] = PaddleOCR(
                     use_doc_orientation_classify=False,
                     use_doc_unwarping=False,
                     use_textline_orientation=False,
-                    device="gpu",
+                    device=desired_device,
                     lang=lang,
                 )
+                self.logger.info(
+                    "Initialized PaddleOCR for lang='%s' on device='%s'", lang, desired_device
+                )
             except Exception as e:
-                self.logger.error(f"Failed to initialize PaddleOCR for lang='{lang}': {e}")
-                raise ExtractionError(f"Failed to initialize PaddleOCR: {e}") from e
+                if desired_device != "cpu":
+                    self.logger.warning(
+                        "Failed to initialize PaddleOCR on device='%s' (%s). Falling back to CPU.",
+                        desired_device,
+                        e,
+                    )
+                    try:
+                        self._instances[lang] = PaddleOCR(
+                            use_doc_orientation_classify=False,
+                            use_doc_unwarping=False,
+                            use_textline_orientation=False,
+                            device="cpu",
+                            lang=lang,
+                        )
+                        self.logger.info(
+                            "Initialized PaddleOCR for lang='%s' on device='cpu' after fallback", lang
+                        )
+                    except Exception as cpu_error:
+                        self.logger.error(
+                            "Failed to initialize PaddleOCR for lang='%s' even on CPU: %s",
+                            lang,
+                            cpu_error,
+                        )
+                        raise ExtractionError(
+                            f"Failed to initialize PaddleOCR even on CPU: {cpu_error}"
+                        ) from cpu_error
+                else:
+                    self.logger.error(
+                        "Failed to initialize PaddleOCR for lang='%s' on CPU: %s",
+                        lang,
+                        e,
+                    )
+                    raise ExtractionError(f"Failed to initialize PaddleOCR: {e}") from e
                 
         return self._instances[lang]
 

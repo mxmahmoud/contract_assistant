@@ -194,6 +194,30 @@ def save_contract(
         raise RegistryError(f"Failed to save contract: {e}") from e
 
 
+def contract_exists(contract_id: str) -> bool:
+    """
+    Check if a contract with the given ID already exists.
+    
+    Args:
+        contract_id: The contract ID to check
+        
+    Returns:
+        True if contract exists, False otherwise
+    """
+    try:
+        _validate_contract_id(contract_id)
+        meta_path = _meta_path(contract_id)
+        exists = meta_path.exists()
+        logger.debug(f"Contract {contract_id} exists: {exists}")
+        return exists
+    except ValidationError:
+        logger.warning(f"Invalid contract ID format: {contract_id}")
+        return False
+    except Exception as e:
+        logger.error(f"Error checking if contract exists: {e}")
+        return False
+
+
 def list_contracts() -> List[Dict[str, Any]]:
     """
     Return a list of saved contracts with minimal metadata.

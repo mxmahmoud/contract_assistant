@@ -29,6 +29,12 @@ class DatabaseType(str, Enum):
     POSTGRES = "postgres"
     SQLITE = "sqlite"
 
+class NERStrategy(str, Enum):
+    """NER strategy selection."""
+    LLM = "llm"
+    SPACY = "spacy"
+
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -39,7 +45,7 @@ class Settings(BaseSettings):
         description="Application environment (development, staging, production)"
     )
     DEBUG: bool = Field(
-        default=False,
+        default=True,
         description="Enable debug mode"
     )
     
@@ -208,9 +214,20 @@ class Settings(BaseSettings):
     )
     
     # --- QA Behavior Configuration ---
-    RAG_BYPASS_KEYWORDS: str = Field(
-        default="explain,detailed,context,search,find,why,how,describe,tell me about",
-        description="Comma-separated keywords that force full RAG search instead of entity lookup"
+    ENABLE_ENTITY_ROUTING: bool = Field(
+        default=False,
+        description="Enable quick entity-based answers for simple questions. Disabled by default since entities are shown in sidebar."
+    )
+    
+    PADDLE_DEVICE: str = Field(
+        default="gpu",
+        description="Device to run PaddleOCR on ('cpu' or 'gpu')"
+    )
+
+    # --- NER Strategy ---
+    NER_STRATEGY: NERStrategy = Field(
+        default=NERStrategy.LLM,
+        description="Entity extraction strategy: 'llm' or 'spacy'"
     )
     
     @property

@@ -117,8 +117,9 @@ def add_chunks_to_vector_store(chunks: List[Document]):
 
         # Upsert ensures re-processing the same PDF won't duplicate entries
         try:
-            # Precompute embeddings for private API upsert
-            embeddings = db.embedding_function.embed_documents(documents)
+            # Get embedding function from our cache
+            embedding_fn = get_embedding_function()
+            embeddings = embedding_fn.embed_documents(documents)
             db._collection.upsert(
                 ids=ids,
                 documents=documents,

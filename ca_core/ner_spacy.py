@@ -1,4 +1,4 @@
-# ca_core/ner_spacy_archived.py
+# ca_core/ner_spacy.py
 """
 ARCHIVED: spaCy NER Implementation
 
@@ -9,7 +9,7 @@ To use this implementation:
 1. Add to pyproject.toml: spacy = "^3.8.0"
 2. Install: poetry install
 3. Download model: python -m spacy download xx_ent_wiki_sm
-4. Import and use: from ca_core.ner_spacy_archived import extract_entities_spacy
+4. Import and use: from ca_core.ner_spacy import extract_entities_spacy
 """
 
 import re

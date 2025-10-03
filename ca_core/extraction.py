@@ -12,13 +12,15 @@ from typing import Any, Dict, List, Optional
 
 from ca_core.base import ExtractionStrategy
 from ca_core.extract_pypdf import PyPDF2Strategy
-from ca_core.extract_ppocr import PaddleOCRStrategy
 from ca_core.exceptions import ExtractionError
 
 logger = logging.getLogger(__name__)
 
-
-
+# Lazy import PaddleOCR - only load when actually needed
+def _get_paddleocr_strategy():
+    """Lazy load PaddleOCR strategy to avoid loading heavy models unless OCR is used."""
+    from ca_core.extract_ppocr import PaddleOCRStrategy
+    return PaddleOCRStrategy()
 
 
 @dataclass
@@ -64,7 +66,8 @@ class ExtractionService:
             if name == "pypdf2":
                 self._strategies[name] = PyPDF2Strategy()
             elif name == "paddleocr":
-                self._strategies[name] = PaddleOCRStrategy()
+                # Lazy load - only import PaddleOCR when actually needed
+                self._strategies[name] = _get_paddleocr_strategy()
             else:
                 raise ExtractionError(f"Unknown extraction strategy: {name}")
                 
