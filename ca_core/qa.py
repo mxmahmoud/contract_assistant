@@ -39,8 +39,24 @@ def answer_from_entities(prompt: str, entities: List[Dict[str, Any]]) -> Optiona
     """
     Answers questions that can be directly addressed by extracted entities
     using a data-driven ruleset.
+    
+    Special keywords that force full RAG search (bypass entity routing):
+    - "explain"
+    - "detailed"
+    - "context"
+    - "search"
+    - "find"
+    
+    Example: "explain who signed this contract" will use full RAG instead of entity list
     """
     prompt_lower = prompt.lower()
+    
+    # Bypass keywords - force full RAG pipeline
+    # Configurable via RAG_BYPASS_KEYWORDS in .env
+    bypass_keywords = [kw.strip() for kw in settings.RAG_BYPASS_KEYWORDS.split(",")]
+    if any(keyword in prompt_lower for keyword in bypass_keywords):
+        logger.debug(f"Bypass keyword detected in prompt, forcing full RAG search")
+        return None  # Skip entity routing, use full RAG
 
     for rule in ENTITY_QUESTION_RULES:
         # Check if any keyword is in the prompt

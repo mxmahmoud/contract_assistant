@@ -207,6 +207,12 @@ class Settings(BaseSettings):
         description="Number of documents to retrieve for context"
     )
     
+    # --- QA Behavior Configuration ---
+    RAG_BYPASS_KEYWORDS: str = Field(
+        default="explain,detailed,context,search,find,why,how,describe,tell me about",
+        description="Comma-separated keywords that force full RAG search instead of entity lookup"
+    )
+    
     @property
     def is_local_mode(self) -> bool:
         """Check if running in local mode."""
