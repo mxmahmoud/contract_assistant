@@ -25,7 +25,7 @@ The main configuration class `Settings` provides:
 - **Vector Store Configuration**: Database types and persistence settings
 - **Docker Configuration**: Network names and service configurations
 
-### Configuration Utilities (`ca_core/config_utils.py`)
+### Configuration Utilities (`utility/config_utils.py`)
 
 Helper functions for:
 
@@ -34,7 +34,7 @@ Helper functions for:
 - Exporting configurations
 - Managing environment variables
 
-### Command-Line Interface (`scripts/manage_config.py`)
+### Command-Line Interface (`utility/config_utils.py`)
 
 CLI tool for:
 
@@ -52,7 +52,7 @@ CLI tool for:
 make config-generate
 
 # Or use the script directly
-python utility/manage_config.py --generate-all
+python utility/config_utils.py render-config utility/litellm.config.template.yaml utility/litellm.config.yaml
 ```
 
 Copy and adjust the example `.env`:
@@ -72,7 +72,7 @@ nano .env
 make config-validate
 
 # Or use the script
-python utility/manage_config.py --validate
+python utility/config_utils.py validate
 ```
 
 ## Configuration Options (Key Variables)
@@ -179,16 +179,16 @@ make config-docker
 
 ```bash
 # Generate .env file
-python utility/manage_config.py --generate-env
+python utility/config_utils.py --generate-env
 
 # Validate configuration
-python utility/manage_config.py --validate
+python utility/config_utils.py --validate
 
 # Show summary
-python utility/manage_config.py --summary
+python utility/config_utils.py --summary
 
 # Generate all files with verbose output
-python utility/manage_config.py --generate-all --verbose
+python utility/config_utils.py --generate-all --verbose
 ```
 
 ## Environment-Specific Configurations

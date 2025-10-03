@@ -30,8 +30,8 @@ LLM_ENTITY_LABELS: Dict[str, str] = {
 @cache_data(ttl=settings.DOCUMENT_PROCESSING_CACHE_TTL)
 def _extract_key_entities_cached(page_text: str) -> Dict[str, Any]:
     """Cached LLM-based key entity extraction for a single page of text."""
-    from ca_core import qa  # Local import to avoid heavy import at module import time
-    return qa.extract_key_entities(page_text)
+    from ca_core import entities  # Local import to avoid heavy import at module import time
+    return entities.extract_key_entities(page_text)
 
 
 def _dedupe_entities(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
