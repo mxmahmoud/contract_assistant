@@ -1,8 +1,7 @@
 import streamlit as st
-import tempfile
-import hashlib
 import uuid
-from typing import Any, Dict, List, Optional
+import logging
+from typing import Any, Dict, List
 
 # Set the page to be wide
 st.set_page_config(layout="wide", page_title="Intelligent Contract Assistant")
@@ -10,57 +9,86 @@ st.set_page_config(layout="wide", page_title="Intelligent Contract Assistant")
 # Import core modules AFTER setting page config
 from ca_core import registry, extraction, chunking, vectorstore, qa, ner
 from ca_core.feedback import log_feedback
+from ca_core.exceptions import ValidationError
 from utility.model_loader import ensure_model_is_loaded, ensure_tei_is_ready
 from utility.utility import save_flattened_pdf, get_hash_of_file
+from utility.session_state import (
+    get_session_state, 
+    update_session_state, 
+    reset_contract_state, 
+    add_message,
+    mark_feedback_submitted
+)
+from utility.caching import cache_data
+from utility.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Model Loading
 # Ensures the required LLM model is downloaded and available if local mode is selected.
 
+logger.info("Starting Contract Assistant application")
 ensure_model_is_loaded()
 ensure_tei_is_ready()
 
 
-
-
 def initialize_session_state():
-    """Initializes Streamlit session state variables."""
-    if "contract_id" not in st.session_state:
-        st.session_state.contract_id = None
-    if "qa_chain" not in st.session_state:
-        st.session_state.qa_chain = None
-    if "entities" not in st.session_state:
-        st.session_state.entities = []
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "last_processed_id" not in st.session_state:
-        st.session_state.last_processed_id = None
-    if "feedback_submitted" not in st.session_state:
-        st.session_state.feedback_submitted = set()
-    if "use_ocr" not in st.session_state:
-        st.session_state.use_ocr = False
+    """Initialize session state using the centralized state management."""
+    state = get_session_state()
+    logger.debug("Session state initialized")
 
-@st.cache_data(ttl=3600)
+
+@cache_data(ttl=settings.DOCUMENT_PROCESSING_CACHE_TTL)
 def process_document(uploaded_file):
-    """Handles the ingestion and processing of an uploaded PDF."""
+    """
+    Handles the ingestion and processing of an uploaded PDF.
+    
+    Args:
+        uploaded_file: Streamlit UploadedFile object
+        
+    Raises:
+        ValidationError: If PDF validation fails
+    """
+    logger.info(f"Processing document: {uploaded_file.name}")
+    
     with st.spinner("Processing document... This may take a moment."):
         file_bytes = uploaded_file.getvalue()
+        
+        # Validate file size
+        size_mb = len(file_bytes) / (1024 * 1024)
+        if size_mb > settings.MAX_PDF_SIZE_MB:
+            error_msg = f"PDF size {size_mb:.2f}MB exceeds maximum of {settings.MAX_PDF_SIZE_MB}MB"
+            logger.error(error_msg)
+            raise ValidationError(error_msg)
+        
+        logger.debug(f"PDF size: {size_mb:.2f}MB")
+        
         contract_id = get_hash_of_file(file_bytes)
-        st.session_state.contract_id = contract_id
+        update_session_state(contract_id=contract_id)
+        logger.info(f"Generated contract ID: {contract_id}")
 
         # Save the uploaded file to its permanent location first
         contract_dir = registry._contract_dir(contract_id)
         registry._ensure_dir(contract_dir)
         pdf_path = registry._pdf_path(contract_id, uploaded_file.name)
         save_flattened_pdf(file_bytes, pdf_path)
+        logger.debug(f"Saved PDF to {pdf_path}")
 
 
         # Core Processing Pipeline
         # Ingestion
         # Use OCR if checkbox is checked, otherwise use pypdf
-        if st.session_state.use_ocr:
-            doc_pages = extraction.extract_text_from_pdf(str(pdf_path), strategy="paddleocr")
-        else:
-            doc_pages = extraction.extract_text_from_pdf(str(pdf_path), strategy="pypdf2")
+        state = get_session_state()
+        extraction_strategy = "paddleocr" if state.use_ocr else "pypdf2"
+        logger.info(f"Extracting text using strategy: {extraction_strategy}")
+        
+        doc_pages = extraction.extract_text_from_pdf(
+            str(pdf_path), 
+            strategy=extraction_strategy,
+            max_pages=settings.MAX_PDF_PAGES
+        )
+        
+        logger.info(f"Extracted {len(doc_pages)} pages from PDF")
 
         # Key Entity Extraction (run on all pages)
         if doc_pages:
@@ -101,51 +129,83 @@ def process_document(uploaded_file):
                     "page": entity["page"]
                 })
             
-            st.session_state.entities = display_entities
+            update_session_state(entities=display_entities)
+            logger.info(f"Extracted {len(display_entities)} total entities")
         else:
-            st.session_state.entities = []
+            update_session_state(entities=[])
+            logger.warning("No pages extracted from PDF")
 
         # Chunking
+        logger.info("Starting document chunking")
         chunks = chunking.chunk_document(doc_pages, contract_id)
+        logger.info(f"Created {len(chunks)} chunks")
 
         # Vector Store
+        logger.info("Adding chunks to vector store")
         vectorstore.add_chunks_to_vector_store(chunks)
 
-        # QA Chain Initialization (cache scoped by contract)
+        # QA Chain Initialization
+        logger.info("Initializing QA chain")
         retriever = vectorstore.get_vector_store_retriever(contract_id=contract_id)
-        st.session_state.qa_chain = qa.get_qa_chain(retriever, cache_key=contract_id)
+        qa_chain = qa.get_qa_chain(retriever)
+        update_session_state(qa_chain=qa_chain)
 
         # Persist the uploaded PDF and metadata/entities for later reuse
+        state = get_session_state()
+        logger.info("Saving contract metadata and entities")
         registry.save_contract(
             contract_id=contract_id,
             original_filename=uploaded_file.name,
             uploaded_bytes=file_bytes,
             num_pages=len(doc_pages),
-            entities=st.session_state.entities,
+            entities=state.entities,
         )
 
         # Clear previous chat messages
-        st.session_state.messages = []
+        reset_contract_state()
         st.success("Document processed successfully! You can now ask questions.")
+        logger.info(f"Document processing complete for contract {contract_id}")
         # Rerun to refresh the sidebar entities table immediately
         st.rerun()
 
 
 def load_existing_contract(contract_id: str):
-    """Load retriever and entities for an already ingested contract."""
-    st.session_state.contract_id = contract_id
-    st.session_state.entities = registry.load_contract_entities(contract_id)
+    """
+    Load retriever and entities for an already ingested contract.
+    
+    Args:
+        contract_id: The contract ID to load
+    """
+    logger.info(f"Loading existing contract: {contract_id}")
+    
+    # Load entities from registry
+    entities = registry.load_contract_entities(contract_id)
+    logger.debug(f"Loaded {len(entities)} entities")
+    
+    # Initialize retriever and QA chain
     retriever = vectorstore.get_vector_store_retriever(contract_id=contract_id)
-    st.session_state.qa_chain = qa.get_qa_chain(retriever, cache_key=contract_id)
-    st.session_state.messages = []
+    qa_chain = qa.get_qa_chain(retriever)
+    
+    # Update session state
+    update_session_state(
+        contract_id=contract_id,
+        entities=entities,
+        qa_chain=qa_chain
+    )
+    
+    # Reset chat history for new contract
+    reset_contract_state()
+    logger.info(f"Successfully loaded contract {contract_id}")
 
 
 def render_chat_history():
     """Renders the chat history and feedback buttons in reverse chronological order."""
-    for i in range(len(st.session_state.messages) - 1, 0, -2):
+    state = get_session_state()
+    
+    for i in range(len(state.messages) - 1, 0, -2):
         # We assume messages are always in user, assistant order.
-        assistant_msg = st.session_state.messages[i]
-        user_msg = st.session_state.messages[i-1]
+        assistant_msg = state.messages[i]
+        user_msg = state.messages[i-1]
 
         # Display user's message
         with st.chat_message(user_msg["role"]):
@@ -193,16 +253,18 @@ with st.sidebar:
         picked_id = options[selected]
 
         # Auto-load when selection changes
-        if st.session_state.get("_last_sidebar_selection") != picked_id:
+        state = get_session_state()
+        if state.last_sidebar_selection != picked_id:
             load_existing_contract(picked_id)
-            st.session_state["_last_sidebar_selection"] = picked_id
+            update_session_state(last_sidebar_selection=picked_id)
     else:
         st.info("No ingested contracts yet.")
 
     st.divider()
     st.header("Key Entities")
-    if st.session_state.entities:
-        st.dataframe(st.session_state.entities, width='stretch')
+    state = get_session_state()
+    if state.entities:
+        st.dataframe(state.entities, width='stretch')
     else:
         st.caption("Entities will appear after processing or loading a contract.")
 
@@ -214,29 +276,35 @@ with main_col:
     st.header("Upload Your Contract")
     
     # OCR checkbox
-    st.session_state.use_ocr = st.checkbox(
+    state = get_session_state()
+    new_use_ocr = st.checkbox(
         "Use OCR", 
-        value=st.session_state.use_ocr,
+        value=state.use_ocr,
         help="Check this box to use OCR (PaddleOCR) for text extraction. Uncheck to use PyPDF for faster processing of text-based PDFs."
     )
+    if new_use_ocr != state.use_ocr:
+        update_session_state(use_ocr=new_use_ocr)
     
     uploaded_file = st.file_uploader(
         "Upload a PDF contract to begin analysis.", type="pdf"
     )
     
     if uploaded_file is not None:
+        state = get_session_state()
         new_contract_id = get_hash_of_file(uploaded_file.getvalue())
-        if st.session_state.last_processed_id != new_contract_id:
+        if state.last_processed_id != new_contract_id:
             # Set last_processed_id first to avoid rerun loops masking chat input
-            st.session_state.last_processed_id = new_contract_id
+            update_session_state(last_processed_id=new_contract_id)
             process_document(uploaded_file)
     
-    if st.session_state.qa_chain:
+    state = get_session_state()
+    if state.qa_chain:
         st.header("Ask a Question")
 
         # Chat input at the top
         if prompt := st.chat_input("What would you like to know about the contract?"):
-            st.session_state.messages.append({"role": "user", "content": prompt})
+            state = get_session_state()
+            add_message("user", prompt)
             
             with st.spinner("Thinking..."):
                 response_content = ""
@@ -244,11 +312,11 @@ with main_col:
                 source_documents = []
 
                 # Route question to entity-based answer if possible
-                entity_answer = qa.answer_from_entities(prompt, st.session_state.entities)
+                entity_answer = qa.answer_from_entities(prompt, state.entities)
                 if entity_answer:
                     response_content = entity_answer
                 else:
-                    response = st.session_state.qa_chain.invoke({"query": prompt})
+                    response = state.qa_chain.invoke({"query": prompt})
                     response_content = response["result"]
                     
                     # Prepare source documents for logging and display
@@ -256,15 +324,14 @@ with main_col:
                     source_documents_for_log = "\n---\n".join([doc.page_content for doc in source_documents])
                 
                 # Append the full assistant message with context for feedback
-                assistant_message = {
-                    "role": "assistant",
-                    "content": response_content,
-                    "id": str(uuid.uuid4()),
-                    "question": prompt,
-                    "sources": source_documents_for_log,
-                    "source_documents": source_documents # Pass documents for rendering
-                }
-                st.session_state.messages.append(assistant_message)
+                add_message(
+                    "assistant",
+                    response_content,
+                    id=str(uuid.uuid4()),
+                    question=prompt,
+                    sources=source_documents_for_log,
+                    source_documents=source_documents
+                )
             
             # Rerun to display the new message and its feedback buttons immediately
             st.rerun()

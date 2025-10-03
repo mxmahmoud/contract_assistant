@@ -1,17 +1,19 @@
 # ca_core/chunking.py
-import uuid
+"""
+Document chunking module for contract processing.
+
+This module handles splitting documents into chunks suitable for embedding.
+"""
 import hashlib
 import logging
 from typing import List, Dict, Any, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
-import streamlit as st
 from utility.config import settings
 
 logger = logging.getLogger(__name__)
 
 
-@st.cache_data
 def chunk_document(
     doc_contents: List[Dict[str, Any]], 
     contract_id: str, 

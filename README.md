@@ -10,6 +10,8 @@ An AI contract analysis and Q&A system designed to run containerized by default 
 - **NER**: Extract parties, dates, monetary values
 - **Persistent storage**: Contracts and vectors persist across restarts
 - **Web UI + CLI**: Streamlit app and Typer CLI
+- **Security**: Input validation, file size limits, path sanitization
+- **GPU Support**: Optional GPU acceleration (CPU-only by default)
 ## Quick Start
 
 1) Clone and configure
@@ -21,8 +23,15 @@ cp env.example .env
 ```
 
 2) Start the stack (dev)
+
+**CPU-only (default, works everywhere):**
 ```bash
 make dev-up
+```
+
+**With NVIDIA GPU support:**
+```bash
+make dev-up-gpu
 ```
 
 3) First run behavior
@@ -82,23 +91,41 @@ make run-app
 ## Docker Architecture
 
 - Compose files
-  - `docker/docker-compose.base.yml`: common services & volumes
+  - `docker/docker-compose.base.yml`: common services & volumes (CPU-only by default)
   - `docker/docker-compose.dev.yml`: dev overrides (hot reload, volumes)
   - `docker/docker-compose.prod.yml`: prod overrides (restart policies)
+  - `docker/docker-compose.gpu.yml`: optional GPU acceleration (use with `-gpu` make targets)
 - Services
   - `app`: Streamlit frontend and orchestration
   - `litellm`: OpenAI-compatible router. Healthchecked via `/health/readiness` (per LiteLLM docs)
   - `ollama`: local LLM server. Entry script pulls `LOCAL_LLM_MODEL` if missing
   - `tei`: embeddings server (intfloat/multilingual-e5-large-instruct)
+- Default configuration uses CPU-only images for maximum compatibility
 
 ## Configuration & Commands
 
 - Make targets
-  - Dev: `dev-up`, `dev-down`, `dev-logs`, `dev-shell`
-  - Prod: `prod-up`, `prod-down`, `prod-logs`, `prod-shell`
+  - Dev: `dev-up`, `dev-up-gpu`, `dev-down`, `dev-logs`, `dev-shell`
+  - Prod: `prod-up`, `prod-up-gpu`, `prod-down`, `prod-logs`, `prod-shell`
   - Local run (OpenAI): `run-app`
   - Code quality: `setup`, `format`, `lint`
+  - Config management: `config-generate`, `config-validate`, `config-summary`
 - See [CONFIGURATION.md](CONFIGURATION.md) for environment variables and advanced options. Note that document chunking is dynamic based on your embedding model's token limits, which can be configured in your `.env` file.
+
+## Security & Limits
+
+The application includes built-in security features and resource limits:
+
+- **PDF Size Limit**: Default 50MB (configurable via `MAX_PDF_SIZE_MB`)
+- **Page Limit**: Default 50 pages (configurable via `MAX_PDF_PAGES`)
+- **Filename Sanitization**: Automatic prevention of path traversal attacks
+- **Input Validation**: Contract IDs and filenames are validated before processing
+
+Configure limits in your `.env` file:
+```bash
+MAX_PDF_SIZE_MB=100
+MAX_PDF_PAGES=50
+```
 
 ## Persistence Details
 
@@ -107,5 +134,17 @@ make run-app
   - Original PDF
   - `meta.json` (filename, pages, timestamps)
   - `entities.json` (NER output)
+- Feedback logs: `data/feedback/feedback.log`
 
 These paths are mounted into containers via bind volumes to persist across restarts.
+
+## Architecture & Code Quality
+
+This project follows modern software engineering best practices:
+
+- **Separation of Concerns**: Core business logic (`ca_core/`) is independent of UI framework
+- **Type Safety**: Pydantic models and dataclasses throughout
+- **Comprehensive Logging**: Structured logging at all levels
+- **Security First**: Input validation, sanitization, and resource limits
+- **Testable**: Framework-agnostic core enables easy unit testing
+- **Configurable**: All magic values moved to configuration

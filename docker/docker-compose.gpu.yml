@@ -1,0 +1,42 @@
+# GPU support override for Contract Assistant
+# Use this file in addition to base.yml and dev/prod.yml for NVIDIA GPU support
+#
+# Usage:
+#   Development with GPU:
+#     docker compose -f docker/docker-compose.base.yml -f docker/docker-compose.dev.yml -f docker/docker-compose.gpu.yml up
+#   Production with GPU:
+#     docker compose -f docker/docker-compose.base.yml -f docker/docker-compose.prod.yml -f docker/docker-compose.gpu.yml up
+
+services:
+  app:
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+  ollama:
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+  tei:
+    # Use GPU-enabled TEI image
+    image: ghcr.io/huggingface/text-embeddings-inference:89-1.8
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+

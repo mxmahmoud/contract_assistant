@@ -1,16 +1,20 @@
 # ca_core/qa.py
+"""
+Question answering module for contract analysis.
+
+This module provides QA chains and entity extraction capabilities.
+"""
 import logging
+from functools import lru_cache
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field
 from langchain.chains import RetrievalQA
 from langchain_core.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_core.vectorstores import VectorStoreRetriever
+from langchain_core.output_parsers import PydanticOutputParser
 
 from utility.config import settings
-import json
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
-from langchain_core.output_parsers import PydanticOutputParser
-import streamlit as st
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +77,18 @@ Question:
 {question}
 """
 
-@st.cache_resource
-def get_qa_chain(_retriever: VectorStoreRetriever, cache_key: str) -> RetrievalQA:
+def get_qa_chain(retriever: VectorStoreRetriever) -> RetrievalQA:
     """
     Initializes and returns the main RetrievalQA chain.
-    Caches the chain per contract to avoid re-initialization.
 
     Args:
-        _retriever: The configured vector store retriever instance. 
-        cache_key: Deterministic key (e.g., contract_id) to scope the cache per contract.
+        retriever: The configured vector store retriever instance
 
     Returns:
-        A RetrievalQA chain ready for querying.
+        A RetrievalQA chain ready for querying
     """
+    logger.info(f"Initializing QA chain with model={settings.llm_model}")
+    
     llm = ChatOpenAI(
         model=settings.llm_model,
         temperature=0.1,
@@ -103,12 +106,12 @@ def get_qa_chain(_retriever: VectorStoreRetriever, cache_key: str) -> RetrievalQ
     qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
         chain_type="stuff",
-        retriever=_retriever,
+        retriever=retriever,
         chain_type_kwargs=chain_type_kwargs,
         return_source_documents=True,
     )
     
-    logger.info("QA chain initialized.")
+    logger.info("QA chain initialized successfully")
     return qa_chain
 
 
@@ -146,17 +149,19 @@ Contract Page Text:
 """
 
 
-@st.cache_data
 def extract_key_entities(text: str) -> dict:
     """
-    Uses the LLM to extract key entities (parties, date, jurisdiction) from the first page of a contract.
+    Uses the LLM to extract key entities from contract text.
 
     Args:
-        text: The text content of the first page of the contract.
+        text: The text content to extract entities from
 
     Returns:
-        A dictionary containing the extracted entities.
+        A dictionary containing the extracted entities
     """
+    logger.info("Extracting key entities using LLM")
+    logger.debug(f"Text length: {len(text)} characters")
+    
     llm = ChatOpenAI(
         model=settings.llm_model,
         temperature=0.1,
@@ -176,9 +181,12 @@ def extract_key_entities(text: str) -> dict:
     
     try:
         response = chain.invoke({"contract_text": text})
-        return response.dict()
+        result = response.dict()
+        logger.info(f"Successfully extracted entities: {len(result.get('parties', []))} parties, "
+                   f"type: {result.get('contract_type', 'unknown')}")
+        return result
     except Exception as e:
-        logger.error(f"Could not parse entities from LLM response: {e}")
+        logger.error(f"Failed to extract entities from LLM response: {e}", exc_info=True)
         # Fallback to a default error structure
         return {
             "parties": ["Extraction Failed"],

@@ -17,7 +17,7 @@ def ingest(
     """
     Ingest, chunk, and embed a PDF contract into the vector store.
     """
-    console.print(f"[bold green]Starting extraciton for: {pdf_path.name}[/bold green]")
+    console.print(f"[bold green]Starting extraction for: {pdf_path.name}[/bold green]")
     
     contract_id = get_hash_of_file(pdf_path.read_bytes())
     console.print(f"Generated Contract ID: [cyan]{contract_id}[/cyan]")
@@ -78,7 +78,7 @@ def ingest(
         entities=entities,
     )
     
-    console.print(f"[bold green]✅ extraction complete for contract ID: {contract_id}[/bold green]")
+    console.print(f"[bold green]✅ Extraction complete for contract ID: {contract_id}[/bold green]")
 
 @app.command()
 def ask(

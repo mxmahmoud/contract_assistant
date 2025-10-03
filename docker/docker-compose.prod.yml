@@ -3,7 +3,7 @@
 
 services:
   app:
-    image: ca_app_prod
+    image: ca_app_prod:latest
     container_name: ca_app_prod
     build:
       context: ..
@@ -12,8 +12,9 @@ services:
       - DEBUG=false
       - ENVIRONMENT=production
     volumes:
-      - ./:/app
       - chroma_data:/app/data/chroma_data
+      - ../data/contracts:/app/data/contracts
+      - ../data/feedback:/app/data/feedback
     restart: unless-stopped
 
   litellm:

@@ -6,9 +6,7 @@ pluggable strategies under the hood and caching heavy OCR models.
 
 from __future__ import annotations
 
-import re
 import logging
-import streamlit as st
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -16,7 +14,6 @@ from ca_core.base import ExtractionStrategy
 from ca_core.extract_pypdf import PyPDF2Strategy
 from ca_core.extract_ppocr import PaddleOCRStrategy
 from ca_core.exceptions import ExtractionError
-from utility.utility import normalize_whitespace_preserve_newlines
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +125,6 @@ class ExtractionService:
             raise ExtractionError(f"Unexpected error during extraction: {e}") from e
 
 
-@st.cache_data(show_spinner=True)
 def extract_text_from_pdf(
     pdf_path: str,
     *,
@@ -138,7 +134,25 @@ def extract_text_from_pdf(
     render_dpi: int = 200,
     max_pages: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Backward-compatible wrapper to extract text and metadata from a PDF."""
+    """
+    Extract text and metadata from a PDF file.
+    
+    Args:
+        pdf_path: Path to the PDF file
+        strategy: Extraction strategy ('auto', 'pypdf2', or 'paddleocr')
+        force_ocr: Force OCR extraction even for text-based PDFs
+        ocr_lang: Language code for OCR
+        render_dpi: DPI for PDF rendering (if needed)
+        max_pages: Maximum number of pages to extract
+        
+    Returns:
+        List of page dictionaries with text and metadata
+        
+    Raises:
+        ExtractionError: If extraction fails
+    """
+    logger.info(f"Starting extraction for '{pdf_path}' with strategy='{strategy}', force_ocr={force_ocr}")
+    
     config = ExtractionConfig(
         strategy=strategy,
         force_ocr=force_ocr,
@@ -148,9 +162,8 @@ def extract_text_from_pdf(
     )
     service = ExtractionService(config)
     pages = service.extract(pdf_path, lang=ocr_lang)
-    logger.info(
-        f"Extracted {len(pages)} pages from '{pdf_path}' using strategy='{strategy}', force_ocr={force_ocr}."
-    )
+    
+    logger.info(f"Successfully extracted {len(pages)} pages from '{pdf_path}'")
     return pages
 
 

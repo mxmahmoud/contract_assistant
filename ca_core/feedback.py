@@ -4,7 +4,7 @@ import streamlit as st
 
 # Feedback Logging Setup
 # Ensure the data directory exists
-Path("data").mkdir(exist_ok=True)
+Path("data/feedback").mkdir(parents=True, exist_ok=True)
 
 # Create a specific logger for feedback
 feedback_logger = logging.getLogger("feedback")
@@ -23,11 +23,23 @@ if not feedback_logger.handlers:
     feedback_logger.addHandler(fh)
 
 def log_feedback(message_id: str, feedback_type: str, question: str, answer: str, context: str):
-    """Logs user feedback to a file."""
-    feedback_logger.info(f"FEEDBACK: message_id='{message_id}', type='{feedback_type}', question='{question}', answer='{answer[:100]}...', context='{context}'")
-    # Update session state to reflect that feedback was given
-    for msg in st.session_state.messages:
-        if msg.get("id") == message_id:
-            msg["feedback_submitted"] = True
-            break
-    st.toast(f"Feedback submitted! Thank you.", icon="✅")
+    """
+    Logs user feedback to a file.
+    
+    Args:
+        message_id: Unique message identifier
+        feedback_type: 'positive' or 'negative'
+        question: User's question
+        answer: Assistant's answer
+        context: Source context/documents
+    """
+    feedback_logger.info(
+        f"FEEDBACK: message_id='{message_id}', type='{feedback_type}', "
+        f"question='{question}', answer='{answer[:100]}...', context_length={len(context)}"
+    )
+    
+    # Import here to avoid circular dependency
+    from utility.session_state import mark_feedback_submitted
+    mark_feedback_submitted(message_id)
+    
+    st.toast("Feedback submitted! Thank you.", icon="✅")

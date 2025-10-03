@@ -1,23 +1,32 @@
 # ca_core/vectorstore.py
+"""
+Vector store management for contract embeddings.
+
+This module provides vector store operations without UI dependencies.
+Caching is handled by the UI layer when needed.
+"""
 import chromadb
 import logging
-from typing import List
+from typing import List, Optional
+from functools import lru_cache
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStoreRetriever
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from utility.config import settings
 from ca_core.exceptions import VectorStoreError
-import streamlit as st
 
 logger = logging.getLogger(__name__)
 
-@st.cache_resource
+
+@lru_cache(maxsize=1)
 def get_chroma_client() -> chromadb.PersistentClient:
     """Initializes and returns a persistent ChromaDB client."""
+    logger.info(f"Initializing ChromaDB client at {settings.CHROMA_PERSIST_DIR}")
     return chromadb.PersistentClient(path=settings.CHROMA_PERSIST_DIR)
 
-@st.cache_resource
+
+@lru_cache(maxsize=1)
 def get_embedding_function() -> OpenAIEmbeddings:
     """Initializes and returns the embedding function based on settings.
     
@@ -38,42 +47,48 @@ def get_embedding_function() -> OpenAIEmbeddings:
         logger.error(f"Failed to initialize embedding function: {e}", exc_info=True)
         raise VectorStoreError(f"Failed to initialize embedding function: {e}") from e
 
-@st.cache_resource
+@lru_cache(maxsize=1)
 def get_chroma_db() -> Chroma:
     """
     Initializes and returns a Chroma instance, reusing client and embedding function.
     """
+    logger.info("Initializing Chroma vector store")
     client = get_chroma_client()
     embedding_function = get_embedding_function()
     
-    return Chroma(
+    db = Chroma(
         client=client,
         collection_name="contract_assistant_collection",
         embedding_function=embedding_function,
         persist_directory=settings.CHROMA_PERSIST_DIR,
     )
+    logger.info("Chroma vector store initialized successfully")
+    return db
 
-def get_vector_store_retriever(contract_id: str | None = None) -> VectorStoreRetriever:
+def get_vector_store_retriever(contract_id: Optional[str] = None) -> VectorStoreRetriever:
     """
     Initializes and returns a ChromaDB vector store retriever.
 
     Args:
-        contract_id (optional): The ID of the contract to filter by.
+        contract_id: The ID of the contract to filter by (optional)
 
     Returns:
-        A retriever configured for MMR search and optional filtering.
+        A retriever configured for similarity search and optional filtering
     """
+    logger.debug(f"Creating vector store retriever for contract_id={contract_id}")
     db = get_chroma_db()
     
-    search_kwargs = {"k": 5}
+    search_kwargs = {"k": settings.RETRIEVER_K}
     if contract_id:
         search_kwargs["filter"] = {"contract_id": contract_id}
+        logger.info(f"Retriever configured with filter: contract_id={contract_id}, k={settings.RETRIEVER_K}")
+    else:
+        logger.info(f"Retriever configured without filter, k={settings.RETRIEVER_K}")
         
     retriever = db.as_retriever(
-        search_type="mmr",
+        search_type="similarity",
         search_kwargs=search_kwargs
     )
-    logger.info(f"ChromaDB retriever initialized. Filtered by contract_id: {contract_id or 'None'}")
     return retriever
 
 

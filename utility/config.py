@@ -177,6 +177,36 @@ class Settings(BaseSettings):
         description="Docker network name for services"
     )
     
+    # --- Application Limits & Timeouts ---
+    MAX_PDF_SIZE_MB: int = Field(
+        default=50,
+        description="Maximum PDF file size in megabytes"
+    )
+    MAX_PDF_PAGES: int = Field(
+        default=50,
+        description="Maximum number of pages to process per PDF"
+    )
+    OLLAMA_STARTUP_TIMEOUT: int = Field(
+        default=600,
+        description="Timeout for Ollama model loading in seconds"
+    )
+    TEI_STARTUP_TIMEOUT: int = Field(
+        default=300,
+        description="Timeout for TEI service startup in seconds"
+    )
+    
+    # --- Caching Configuration ---
+    DOCUMENT_PROCESSING_CACHE_TTL: int = Field(
+        default=3600,
+        description="Cache TTL for document processing in seconds"
+    )
+    
+    # --- Vector Store Configuration ---
+    RETRIEVER_K: int = Field(
+        default=5,
+        description="Number of documents to retrieve for context"
+    )
+    
     @property
     def is_local_mode(self) -> bool:
         """Check if running in local mode."""

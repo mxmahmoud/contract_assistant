@@ -1,10 +1,13 @@
 # utility/model_loader.py
+"""
+Model loading and service health checking for local LLM services.
+"""
 import requests
-import json
 import time
 import logging
 import streamlit as st
 from utility.config import settings
+from utility.session_state import get_session_state, update_session_state
 from ca_core.exceptions import ModelLoadingError, ServiceUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -33,7 +36,8 @@ def ensure_model_is_loaded():
         return
 
     # Avoid repeating the check/messages on every rerun
-    if st.session_state.get("_ollama_model_ready", False):
+    state = get_session_state()
+    if state.ollama_model_ready:
         return
 
     model_name = _normalize_ollama_model_name(settings.LOCAL_LLM_MODEL)
@@ -48,7 +52,7 @@ def ensure_model_is_loaded():
         models = response.json().get("models", [])
         if any(m.get("name") == model_name for m in models):
             logger.info(f"Model '{model_name}' found locally.")
-            st.session_state["_ollama_model_ready"] = True
+            update_session_state(ollama_model_ready=True)
             st.toast(f"LLM model '{model_name}' is available.", icon="✅")
             return
 
@@ -57,7 +61,7 @@ def ensure_model_is_loaded():
         with status_placeholder.container():
             st.info(f"Waiting for LLM model '{model_name}' to become available...")
             with st.spinner("Connecting to Ollama and waiting for model preparation..."):
-                timeout_seconds = 600  # 10 minutes
+                timeout_seconds = settings.OLLAMA_STARTUP_TIMEOUT
                 start_time = time.time()
                 while time.time() - start_time < timeout_seconds:
                     try:
@@ -68,7 +72,7 @@ def ensure_model_is_loaded():
                                 logger.info("Ollama model is ready.")
                                 status_placeholder.empty()
                                 st.toast("LLM model is ready.", icon="✅")
-                                st.session_state["_ollama_model_ready"] = True
+                                update_session_state(ollama_model_ready=True)
                                 st.rerun()
                                 return
                     except requests.exceptions.RequestException as e:
@@ -106,12 +110,13 @@ def ensure_tei_is_ready():
         return
 
     # Avoid repeating the wait/info message on each rerun
-    if st.session_state.get("_tei_ready", False):
+    state = get_session_state()
+    if state.tei_ready:
         return
 
     model_name = settings.LOCAL_EMBEDDINGS_MODEL
     tei_health_url = f"{settings.tei_url}/health"
-    timeout_seconds = 300  # 5 minutes
+    timeout_seconds = settings.TEI_STARTUP_TIMEOUT
     start_time = time.time()
 
     status_placeholder = st.empty()
@@ -125,7 +130,7 @@ def ensure_tei_is_ready():
                         logger.info("TEI service is ready.")
                         status_placeholder.empty()
                         st.toast("Embedding service is ready.", icon="✅")
-                        st.session_state["_tei_ready"] = True
+                        update_session_state(tei_ready=True)
                         st.rerun()
                         return
                 except requests.exceptions.RequestException as e:
