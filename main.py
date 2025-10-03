@@ -24,18 +24,21 @@ from utility.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Model Loading
-# Ensures the required LLM model is downloaded and available if local mode is selected.
-
 logger.info("Starting Contract Assistant application")
-ensure_model_is_loaded()
-ensure_tei_is_ready()
 
-
+# Initialize session state FIRST (before any other operations)
 def initialize_session_state():
     """Initialize session state using the centralized state management."""
     state = get_session_state()
     logger.debug("Session state initialized")
+
+# Call it immediately at module level
+initialize_session_state()
+
+# Model Loading - Now safe to check session state
+# Ensures the required LLM model is downloaded and available if local mode is selected.
+ensure_model_is_loaded()
+ensure_tei_is_ready()
 
 
 @cache_data(ttl=settings.DOCUMENT_PROCESSING_CACHE_TTL)
@@ -239,8 +242,6 @@ def render_chat_history():
 
 
 # UI Layout
-initialize_session_state()
-
 st.title("📄 Contract Assistant")
 
 # Sidebar: list existing contracts + entity display
