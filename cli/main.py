@@ -2,17 +2,55 @@
 import typer
 from rich.console import Console
 from pathlib import Path
+import time
 
-from ca_core import extraction, chunking, vectorstore, qa, registry
+from ca_core import extraction, chunking, vectorstore, qa, registry, ner
 from utility.utility import get_hash_of_file
+from utility.config import settings
+from utility.model_loader import check_ollama_status, check_tei_status
+
 
 app = typer.Typer()
 console = Console()
 
 
+def ensure_services_ready():
+    """Check for local services and wait for them to be ready."""
+    if not settings.is_local_mode:
+        return
+
+    console.print("[yellow]Checking local service readiness...[/yellow]")
+    
+    with console.status("[bold green]Waiting for services...") as status:
+        while not (ollama_ready := check_ollama_status()):
+            status.update("[bold yellow]Ollama service not ready, waiting...[/bold yellow] The model may be downloading.")
+            time.sleep(5)
+        
+        console.print("[bold green]✅ Ollama service is ready.[/bold green]")
+        
+        while not (tei_ready := check_tei_status()):
+            status.update("[bold yellow]TEI service not ready, waiting...[/bold yellow]")
+            time.sleep(2)
+            
+        console.print("[bold green]✅ TEI service is ready.[/bold green]")
+
+    console.print("[bold green]All local services are ready.[/bold green]")
+
+
+@app.callback()
+def main_callback(ctx: typer.Context):
+    """
+    Main callback to run before any command.
+    Ensures local services are ready before proceeding.
+    """
+    # This check will run before any command in the CLI app
+    ensure_services_ready()
+
+
 @app.command()
 def ingest(
-    pdf_path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True, help="Path to the PDF contract to ingest.")
+    pdf_path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True, help="Path to the PDF contract to ingest."),
+    ocr: bool = typer.Option(False, "--ocr", help="Force OCR extraction for the PDF.")
 ):
     """
     Ingest, chunk, and embed a PDF contract into the vector store.
@@ -22,8 +60,9 @@ def ingest(
     contract_id = get_hash_of_file(pdf_path.read_bytes())
     console.print(f"Generated Contract ID: [cyan]{contract_id}[/cyan]")
     
-    console.print("Extracting text from PDF...")
-    doc_pages = extraction.extract_text_from_pdf(str(pdf_path))
+    extraction_strategy = "paddleocr" if ocr else "pypdf2"
+    console.print(f"Extracting text from PDF using strategy: [bold]{extraction_strategy}[/bold]...")
+    doc_pages = extraction.extract_text_from_pdf(str(pdf_path), strategy=extraction_strategy)
     
     console.print("Chunking document...")
     chunks = chunking.chunk_document(doc_pages, contract_id)
@@ -33,52 +72,22 @@ def ingest(
 
     console.print("Extracting entities and registering contract metadata...")
     entities = []
-    try:
-        if doc_pages:
-            first_page_text = doc_pages[0]["text"]
-            key_entities_data = qa.extract_key_entities(first_page_text)
-            
-            # Transform for storage
-            entity_mapping = {
-                "parties": "Party",
-                "agreement_date": "Agreement Date", 
-                "jurisdiction": "Jurisdiction",
-                "contract_type": "Contract Type",
-                "termination_date": "Termination Date",
-                "monetary_amounts": "Monetary Amount",
-                "key_obligations": "Key Obligation"
-            }
-            
-            for key, label in entity_mapping.items():
-                values = key_entities_data.get(key)
-                if values and values != "Not Found" and values != ["Extraction Failed"]:
-                    if isinstance(values, list):
-                        for value in values:
-                            if value != "Extraction Failed":
-                                entities.append({"label": label, "value": value, "page": 1})
-                    else:
-                        entities.append({"label": label, "value": values, "page": 1})
-                        
-        console.print(f"[green]Extracted {len(entities)} entities using LLM[/green]")
-    except Exception as e:
-        console.print(f"[yellow]Warning:[/yellow] Entity extraction failed: {e}")
-        # Fallback to regex-based extraction
+    if doc_pages:
         try:
-            from ca_core import ner as _ner
-            entities = _ner.extract_entities(doc_pages)
-            console.print(f"[green]Fallback: Extracted {len(entities)} entities using regex[/green]")
-        except Exception as e2:
-            console.print(f"[red]Error:[/red] Both LLM and regex extraction failed: {e2}")
+            entities = ner.extract_entities(doc_pages)
+            console.print(f"[green]Extracted {len(entities)} entities using '{settings.NER_STRATEGY.value}' strategy.[/green]")
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Entity extraction failed: {e}")
 
     registry.save_contract(
         contract_id=contract_id,
         original_filename=pdf_path.name,
-        source_pdf_path=pdf_path,
+        uploaded_bytes=pdf_path.read_bytes(),
         num_pages=len(doc_pages),
         entities=entities,
     )
     
-    console.print(f"[bold green]✅ Extraction complete for contract ID: {contract_id}[/bold green]")
+    console.print(f"[bold green]✅ Ingestion complete for contract ID: {contract_id}[/bold green]")
 
 @app.command()
 def ask(
