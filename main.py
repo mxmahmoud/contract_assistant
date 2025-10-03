@@ -143,10 +143,12 @@ def process_document(uploaded_file):
         logger.info("Adding chunks to vector store")
         vectorstore.add_chunks_to_vector_store(chunks)
 
-        # QA Chain Initialization
+        # QA Chain Initialization (cache per contract)
         logger.info("Initializing QA chain")
         retriever = vectorstore.get_vector_store_retriever(contract_id=contract_id)
         qa_chain = qa.get_qa_chain(retriever)
+        state = get_session_state()
+        state.qa_chains_by_contract[contract_id] = qa_chain
         update_session_state(qa_chain=qa_chain)
 
         # Persist the uploaded PDF and metadata/entities for later reuse
@@ -178,9 +180,16 @@ def load_existing_contract(contract_id: str):
     entities = registry.load_contract_entities(contract_id)
     logger.debug(f"Loaded {len(entities)} entities")
     
-    # Initialize retriever and QA chain
-    retriever = vectorstore.get_vector_store_retriever(contract_id=contract_id)
-    qa_chain = qa.get_qa_chain(retriever)
+    # Initialize or reuse QA chain from cache
+    state = get_session_state()
+    qa_chain = state.qa_chains_by_contract.get(contract_id)
+    if qa_chain is None:
+        logger.info("No cached QA chain for contract, creating new one")
+        retriever = vectorstore.get_vector_store_retriever(contract_id=contract_id)
+        qa_chain = qa.get_qa_chain(retriever)
+        state.qa_chains_by_contract[contract_id] = qa_chain
+    else:
+        logger.info("Reusing cached QA chain for contract")
     
     # Update session state
     update_session_state(

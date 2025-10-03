@@ -113,6 +113,7 @@ class PaddleOCRStrategy(ExtractionStrategy):
         Raises:
             ExtractionError: If OCR fails
         """
+        self.logger.info(f"Starting PaddleOCR extraction for '{pdf_path}'")
         documents: List[Dict[str, Any]] = []
         
         try:
@@ -122,6 +123,7 @@ class PaddleOCRStrategy(ExtractionStrategy):
             self.logger.error(f"OCR prediction failed for {pdf_path}: {e}")
             raise ExtractionError(f"OCR prediction failed: {e}") from e
         
+        self.logger.info(f"Finished PaddleOCR extraction for '{pdf_path}'")
         for i, page_result in enumerate(results):
             if max_pages is not None and i >= max_pages:
                 break

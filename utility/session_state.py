@@ -16,6 +16,7 @@ class SessionState:
     
     contract_id: Optional[str] = None
     qa_chain: Optional[RetrievalQA] = None
+    qa_chains_by_contract: Dict[str, RetrievalQA] = field(default_factory=dict)
     entities: List[Dict[str, Any]] = field(default_factory=list)
     messages: List[Dict[str, Any]] = field(default_factory=list)
     last_processed_id: Optional[str] = None

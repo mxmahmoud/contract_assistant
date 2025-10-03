@@ -67,6 +67,21 @@ def answer_from_entities(prompt: str, entities: List[Dict[str, Any]]) -> Optiona
     return None
 
 
+@lru_cache(maxsize=1)
+def get_llm() -> ChatOpenAI:
+    """
+    Initializes and returns a cached LLM client instance.
+    This ensures the client is created only once per session.
+    """
+    logger.info(f"Initializing LLM client for model={settings.llm_model}")
+    return ChatOpenAI(
+        model=settings.llm_model,
+        temperature=0.1,
+        openai_api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+    )
+
+
 QA_SYSTEM_PROMPT = """You are a meticulous AI contract assistant. Your task is to answer questions based ONLY on the provided contract excerpts. Do not use any external knowledge.
 
 Your response must be in three parts:
@@ -93,12 +108,7 @@ def get_qa_chain(retriever: VectorStoreRetriever) -> RetrievalQA:
     """
     logger.info(f"Initializing QA chain with model={settings.llm_model}")
     
-    llm = ChatOpenAI(
-        model=settings.llm_model,
-        temperature=0.1,
-        openai_api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-    )
+    llm = get_llm()
 
     qa_prompt = PromptTemplate(
         template=QA_SYSTEM_PROMPT,
@@ -166,12 +176,7 @@ def extract_key_entities(text: str) -> dict:
     logger.info("Extracting key entities using LLM")
     logger.debug(f"Text length: {len(text)} characters")
     
-    llm = ChatOpenAI(
-        model=settings.llm_model,
-        temperature=0.1,
-        openai_api_key=settings.openai_api_key,
-        base_url=settings.openai_base_url,
-    )
+    llm = get_llm()
     
     parser = PydanticOutputParser(pydantic_object=KeyEntities)
 
