@@ -11,13 +11,20 @@ st.set_page_config(layout="wide", page_title="Intelligent Contract Assistant")
 from ca_core import registry, extraction, chunking, vectorstore, qa, ner
 from ca_core.feedback import log_feedback
 from ca_core.exceptions import ValidationError
-from utility.model_loader import check_ollama_status, check_tei_status
+from utility.model_loader import (
+    check_ollama_status,
+    check_tei_status,
+    load_local_llm_model,
+    is_ollama_service_ready,
+)
 from utility.utility import save_flattened_pdf, get_hash_of_file
 from utility.session_state import (
     get_session_state, 
     update_session_state, 
     reset_contract_state, 
-    add_message
+    add_message,
+    clear_session_state,
+    handle_ocr_change,
 )
 from utility.config import settings
 from utility.caching import cache_data
@@ -243,44 +250,61 @@ def render_chat_history():
                     ), disabled=disable_buttons)
 
 
-state = get_session_state()
-if not state.app_initialized:
-    logger.info("First run for this session, performing initial setup (non-blocking)...")
+def main():
+    st.set_page_config(page_title="Contract Assistant", layout="wide")
 
-    st.info("🔄 Initializing application, please wait...")
-    st.write(
-        "Connecting to backend services. This may take a moment on first startup as models are downloaded."
-    )
+    # Initialize session state
+    initialize_session_state()
 
-    ollama_ready = check_ollama_status()
-    tei_ready = check_tei_status()
+    if "services_ready" not in st.session_state:
+        st.session_state.services_ready = not settings.is_local_mode
 
-    ollama_status = "✅ Ready" if ollama_ready else "⏳ Downloading/Loading..."
-    tei_status = "✅ Ready" if tei_ready else "⏳ Starting..."
+    # --- Service Readiness Check (for local mode) ---
+    if settings.is_local_mode and not st.session_state.services_ready:
+        st.info("Checking readiness of local services... This may take a moment on first start.")
+        
+        # Use placeholders for dynamic status updates
+        ollama_status = st.empty()
+        tei_status = st.empty()
+        model_status = st.empty()
 
-    st.status(
-        f"\n- **LLM Service (Ollama):** {ollama_status}\n- **Embedding Service (TEI):** {tei_status}\n",
-        state="complete" if (ollama_ready and tei_ready) else "running",
-        expanded=True,
-    )
+        with st.spinner("Waiting for Ollama service..."):
+            while not is_ollama_service_ready():
+                time.sleep(2)
+        ollama_status.success("✅ Ollama service is ready.")
 
-    if ollama_ready and tei_ready:
-        update_session_state(app_initialized=True)
-        logger.info("All services ready. Proceeding to app UI.")
+        with st.spinner(f"Loading LLM model: {settings.LOCAL_LLM_MODEL}... This can take several minutes."):
+            if not load_local_llm_model():
+                model_status.error(
+                    f"❌ Failed to load LLM model '{settings.LOCAL_LLM_MODEL}'. "
+                    "Please check the model name in your .env file and ensure Ollama is running correctly. "
+                    "See the application logs for more details."
+                )
+                return  # Stop the app if model loading fails
+        model_status.success(f"✅ LLM model '{settings.LOCAL_LLM_MODEL}' is ready.")
+
+        with st.spinner("Waiting for TEI service..."):
+            while not check_tei_status():
+                time.sleep(1)
+        tei_status.success("✅ TEI service is ready.")
+        
+        
+        
+        st.session_state.services_ready = True
+        time.sleep(2)  # Show success messages briefly before rerunning
         st.rerun()
-    else:
-        time.sleep(5)
-        st.rerun()
 
-st.title("📄 Contract Assistant")
+    # --- Main App ---
+    render_sidebar()
+    render_main_content()
 
-# Sidebar: list existing contracts + entity display
-with st.sidebar:
-    st.header("Contracts")
+
+def render_sidebar():
+    st.sidebar.header("Contracts")
     contracts = registry.list_contracts()
     if contracts:
         options = {f"{c['original_filename']} ({c['contract_id'][:8]})": c["contract_id"] for c in contracts}
-        selected = st.selectbox("Select a contract", options=list(options.keys()), key="contract_select")
+        selected = st.sidebar.selectbox("Select a contract", options=list(options.keys()), key="contract_select")
         picked_id = options[selected]
 
         # Auto-load when selection changes
@@ -290,100 +314,107 @@ with st.sidebar:
             update_session_state(last_sidebar_selection=picked_id)
             st.rerun()
     else:
-        st.info("No ingested contracts yet.")
+        st.sidebar.info("No ingested contracts yet.")
 
-    st.divider()
-    st.header("Key Entities")
+    st.sidebar.divider()
+    st.sidebar.header("Key Entities")
     state = get_session_state()
     if state.entities:
-        st.dataframe(state.entities, width='stretch')
+        st.sidebar.dataframe(state.entities, width='stretch')
     else:
-        st.caption("Entities will appear after processing or loading a contract.")
+        st.sidebar.caption("Entities will appear after processing or loading a contract.")
+
+    if st.sidebar.button("Clear Session State"):
+        clear_session_state()
 
 
-# Main column for file upload and chat
-main_col, _ = st.columns([2, 1])
+def render_main_content():
+    main_col, _ = st.columns([2, 1])
 
-with main_col:
-    st.header("Upload Your Contract")
-    
-    # OCR checkbox
-    state = get_session_state()
-    new_use_ocr = st.checkbox(
-        "Use OCR", 
-        value=state.use_ocr,
-        help="Check this box to use OCR (PaddleOCR) for text extraction. Uncheck to use PyPDF for faster processing of text-based PDFs."
-    )
-    if new_use_ocr != state.use_ocr:
-        update_session_state(use_ocr=new_use_ocr)
-    
-    uploaded_file = st.file_uploader(
-        "Upload a PDF contract to begin analysis.", type="pdf"
-    )
-    
-    if uploaded_file is not None:
-        state = get_session_state()
-        new_contract_id = get_hash_of_file(uploaded_file.getvalue())
-        if state.last_processed_id != new_contract_id:
-            update_session_state(last_processed_id=new_contract_id)
-            try:
-                process_document(uploaded_file)
-            except Exception as e:
-                logger.error("Unhandled error during document processing: %s", e, exc_info=True)
-                st.error(
-                    "An unexpected error occurred while processing the document. "
-                    "Check the application logs for details."
-                )
-                reset_contract_state()
-                update_session_state(
-                    last_processed_id=None,
-                    contract_id=None,
-                    qa_chain=None,
-                    entities=[],
-                )
-            st.rerun()
-    
-    state = get_session_state()
-    if state.qa_chain:
-        st.header("Ask a Question")
-
-        # Chat input at the top
-        if prompt := st.chat_input("What would you like to know about the contract?"):
-            state = get_session_state()
-            add_message("user", prompt)
-            
-            with st.spinner("Thinking..."):
-                response_content = ""
-                source_documents_for_log = ""
-                source_documents = []
-
-                # Route question to entity-based answer if possible
-                entity_answer = qa.answer_from_entities(prompt, state.entities)
-                if entity_answer:
-                    response_content = entity_answer
-                else:
-                    response = state.qa_chain.invoke({"query": prompt})
-                    response_content = response["result"]
-                    
-                    # Prepare source documents for logging and display
-                    source_documents = response.get("source_documents", [])
-                    source_documents_for_log = "\n---\n".join([doc.page_content for doc in source_documents])
-                
-                # Append the full assistant message with context for feedback
-                add_message(
-                    "assistant",
-                    response_content,
-                    id=str(uuid.uuid4()),
-                    question=prompt,
-                    sources=source_documents_for_log,
-                    source_documents=source_documents
-                )
-            
-            # Rerun to display the new message and its feedback buttons immediately
-            st.rerun()
-
-        # Display chat history
-        render_chat_history()
+    with main_col:
+        st.header("Upload Your Contract")
         
-    else:
-        st.info("Please upload or load a contract to enable the chat.")
+        # OCR checkbox
+        state = get_session_state()
+        st.checkbox(
+            "Use OCR",
+            value=state.use_ocr,
+            help="Check this box to use OCR (PaddleOCR) for text extraction. Uncheck to use PyPDF for faster processing of text-based PDFs.",
+            key="ocr_checkbox",
+            on_change=handle_ocr_change,
+        )
+        
+        uploaded_file = st.file_uploader(
+            "Upload a PDF contract to begin analysis.", type="pdf"
+        )
+        
+        if uploaded_file is not None:
+            state = get_session_state()
+            new_contract_id = get_hash_of_file(uploaded_file.getvalue())
+            if state.last_processed_id != new_contract_id:
+                update_session_state(last_processed_id=new_contract_id)
+                try:
+                    process_document(uploaded_file)
+                except Exception as e:
+                    logger.error("Unhandled error during document processing: %s", e, exc_info=True)
+                    st.error(
+                        "An unexpected error occurred while processing the document. "
+                        "Check the application logs for details."
+                    )
+                    reset_contract_state()
+                    update_session_state(
+                        last_processed_id=None,
+                        contract_id=None,
+                        qa_chain=None,
+                        entities=[],
+                    )
+                st.rerun()
+        
+        state = get_session_state()
+        if state.qa_chain:
+            st.header("Ask a Question")
+
+            # Chat input at the top
+            if prompt := st.chat_input("What would you like to know about the contract?"):
+                state = get_session_state()
+                add_message("user", prompt)
+                
+                with st.spinner("Thinking..."):
+                    response_content = ""
+                    source_documents_for_log = ""
+                    source_documents = []
+
+                    # Route question to entity-based answer if possible
+                    entity_answer = qa.answer_from_entities(prompt, state.entities)
+                    if entity_answer:
+                        response_content = entity_answer
+                    else:
+                        response = state.qa_chain.invoke({"query": prompt})
+                        response_content = response["result"]
+                        
+                        # Prepare source documents for logging and display
+                        source_documents = response.get("source_documents", [])
+                        source_documents_for_log = "\n---\n".join([doc.page_content for doc in source_documents])
+                    
+                    # Append the full assistant message with context for feedback
+                    add_message(
+                        "assistant",
+                        response_content,
+                        id=str(uuid.uuid4()),
+                        question=prompt,
+                        sources=source_documents_for_log,
+                        source_documents=source_documents
+                    )
+                
+                # Rerun to display the new message and its feedback buttons immediately
+                st.rerun()
+
+            # Display chat history
+            render_chat_history()
+            
+        else:
+            st.info("Please upload or load a contract to enable the chat.")
+
+
+if __name__ == "__main__":
+    main()

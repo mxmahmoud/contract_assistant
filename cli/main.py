@@ -7,7 +7,7 @@ import time
 from ca_core import extraction, chunking, vectorstore, qa, registry, ner
 from utility.utility import get_hash_of_file
 from utility.config import settings
-from utility.model_loader import check_ollama_status, check_tei_status
+from utility.model_loader import check_ollama_status, check_tei_status, load_local_llm_model
 
 
 app = typer.Typer()
@@ -33,6 +33,10 @@ def ensure_services_ready():
             time.sleep(2)
             
         console.print("[bold green]✅ TEI service is ready.[/bold green]")
+
+        status.update(f"[bold green]Loading local LLM model: {settings.LOCAL_LLM_MODEL}...[/bold green]")
+        load_local_llm_model()
+        console.print(f"[bold green]✅ LLM model '{settings.LOCAL_LLM_MODEL}' is ready.[/bold green]")
 
     console.print("[bold green]All local services are ready.[/bold green]")
 

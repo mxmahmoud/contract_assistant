@@ -96,3 +96,34 @@ def mark_feedback_submitted(message_id: str) -> None:
             msg["feedback_submitted"] = True
             break
 
+
+def clear_session_state() -> None:
+    """
+    Clear the entire session state and re-initializes it.
+    """
+    st.session_state._app_state = SessionState()
+    st.rerun()
+
+
+def handle_ocr_change():
+    """
+    Callback to handle the change in the OCR checkbox.
+    This function is called when the checkbox value changes.
+    """
+    state = get_session_state()
+    new_value = st.session_state.ocr_checkbox  # Get the new value from the widget's key
+    
+    if state.use_ocr != new_value:
+        update_session_state(use_ocr=new_value)
+        
+        # Log the change
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"OCR checkbox changed to {new_value}")
+        
+        # Show a toast message to the user
+        if new_value:
+            st.toast("OCR mode enabled. Processing may be slower.", icon="📄")
+        else:
+            st.toast("OCR mode disabled. Using faster text extraction.", icon="⚡️")
+
