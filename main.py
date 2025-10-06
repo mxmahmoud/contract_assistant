@@ -295,14 +295,31 @@ def main():
                 time.sleep(2)
         ollama_status.success("✅ Ollama service is ready.")
 
-        with st.spinner(f"Loading LLM model: {settings.LOCAL_LLM_MODEL}... This can take several minutes."):
-            if not load_local_llm_model():
-                model_status.error(
-                    f"❌ Failed to load LLM model '{settings.LOCAL_LLM_MODEL}'. "
-                    "Please check the model name in your .env file and ensure Ollama is running correctly. "
-                    "See the application logs for more details."
-                )
-                return  # Stop the app if model loading fails
+        with st.spinner(f"Checking LLM model: {settings.LOCAL_LLM_MODEL}..."):
+            from utility.model_loader import check_ollama_status
+            model_exists = check_ollama_status()
+        
+        if not model_exists:
+            model_status.info(f"📥 Model '{settings.LOCAL_LLM_MODEL}' not found locally. Downloading... This may take several minutes.")
+            with st.spinner(f"Downloading model: {settings.LOCAL_LLM_MODEL}... Please wait..."):
+                if not load_local_llm_model():
+                    model_status.error(
+                        f"❌ Failed to download LLM model '{settings.LOCAL_LLM_MODEL}'. "
+                        "Please check the model name in your .env file, ensure Ollama is running correctly, "
+                        "and verify your internet connection. See the application logs for more details."
+                    )
+                    return  # Stop the app if model loading fails
+        else:
+            model_status.info(f"Loading model: {settings.LOCAL_LLM_MODEL}...")
+            with st.spinner(f"Loading LLM model: {settings.LOCAL_LLM_MODEL}..."):
+                if not load_local_llm_model():
+                    model_status.error(
+                        f"❌ Failed to load LLM model '{settings.LOCAL_LLM_MODEL}'. "
+                        "Please check the model name in your .env file and ensure Ollama is running correctly. "
+                        "See the application logs for more details."
+                    )
+                    return  # Stop the app if model loading fails
+        
         model_status.success(f"✅ LLM model '{settings.LOCAL_LLM_MODEL}' is ready.")
 
         with st.spinner("Waiting for TEI service..."):
