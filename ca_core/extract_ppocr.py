@@ -125,6 +125,8 @@ class PaddleOCRStrategy(ExtractionStrategy):
         
         self.logger.info(f"Finished PaddleOCR extraction for '{pdf_path}'")
         for i, page_result in enumerate(results):
+            page_result.save_to_img("output")
+            page_result.save_to_json("output")
             if max_pages is not None and i >= max_pages:
                 break
             

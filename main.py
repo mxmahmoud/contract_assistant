@@ -4,11 +4,22 @@ import logging
 from typing import Any, Dict, List
 import time
 
+# --- Logging Configuration ---
+# Must be at the top before any other modules are imported.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+# --- End Logging Configuration ---
+
+
 # Set the page to be wide
 st.set_page_config(layout="wide", page_title="Intelligent Contract Assistant")
 
 # Import core modules AFTER setting page config
 from ca_core import registry, extraction, chunking, vectorstore, qa, ner
+from ca_core.vectorstore import delete_contract_from_vector_store
 from ca_core.feedback import log_feedback
 from ca_core.exceptions import ValidationError
 from utility.model_loader import (
@@ -25,14 +36,13 @@ from utility.session_state import (
     add_message,
     clear_session_state,
     handle_ocr_change,
+    handle_reprocess_change,
 )
 from utility.config import settings
 from utility.caching import cache_data
 
 logger = logging.getLogger(__name__)
 logger.info("Starting Contract Assistant application")
-
- 
 
 # Initialize session state FIRST (before any other operations)
 def initialize_session_state():
@@ -86,8 +96,9 @@ def process_document(uploaded_file):
     logger.info(f"Generated contract ID: {contract_id}")
     
     # Check if contract already exists
+    state = get_session_state()
     try:
-        if registry.contract_exists(contract_id):
+        if registry.contract_exists(contract_id) and not state.reprocess_existing:
             logger.info(f"Contract {contract_id} already exists, loading from cache")
             with st.spinner("Loading document from cache..."):
                 load_existing_contract(contract_id)
@@ -95,15 +106,18 @@ def process_document(uploaded_file):
                 # Get contract metadata for display
                 meta = registry.load_contract_meta(contract_id)
                 if meta:
-                    st.success(f"✅ Document '{meta.get('original_filename', 'Unknown')}' loaded successfully!")
+                    st.success(f"✅ Document '{meta.get('original_filename', 'Unknown')}' loaded from cache!")
                 else:
-                    st.success("✅ Document loaded successfully!")
+                    st.success("✅ Document loaded from cache!")
             return
+        elif registry.contract_exists(contract_id) and state.reprocess_existing:
+            logger.info(f"Contract {contract_id} exists but reprocess flag is set, will reprocess")
+            st.info("🔄 Reprocessing existing contract...")
     except Exception as e:
         logger.error(f"Error during duplicate check: {e}", exc_info=True)
         st.warning(f"Could not check for duplicates, processing as new document...")
     
-    # New document - proceed with full processing
+    # New document OR reprocessing - proceed with full processing
     with st.spinner("Processing document... This may take a moment."):
         
         update_session_state(contract_id=contract_id)
@@ -147,6 +161,14 @@ def process_document(uploaded_file):
         logger.info(f"Created {len(chunks)} chunks")
 
         # Vector Store
+        # First, delete any existing chunks for this contract to prevent duplicates
+        try:
+            old_chunks_count = delete_contract_from_vector_store(contract_id)
+            if old_chunks_count > 0:
+                logger.info(f"Deleted {old_chunks_count} old chunks before adding new ones")
+        except Exception as e:
+            logger.warning(f"Failed to delete old chunks (continuing anyway): {e}")
+        
         logger.info("Adding chunks to vector store")
         vectorstore.add_chunks_to_vector_store(chunks)
 
@@ -304,8 +326,41 @@ def render_sidebar():
     contracts = registry.list_contracts()
     if contracts:
         options = {f"{c['original_filename']} ({c['contract_id'][:8]})": c["contract_id"] for c in contracts}
-        selected = st.sidebar.selectbox("Select a contract", options=list(options.keys()), key="contract_select")
-        picked_id = options[selected]
+        
+        # Put dropdown and delete button in the same row
+        col1, _, col3 = st.sidebar.columns([2, 1, 1])
+        
+        with col1:
+            selected = st.selectbox(
+                "Select a contract", 
+                options=list(options.keys()), 
+                key="contract_select",
+                label_visibility="collapsed"
+            )
+            picked_id = options[selected]
+        
+        with col3:
+            if st.button("🗑️", key="delete_contract", help="Delete this contract", use_container_width=True):
+                try:
+                    logger.info(f"User requested deletion of contract {picked_id}")
+                    if registry.delete_contract(picked_id, delete_from_vectorstore=True):
+                        st.sidebar.success("Contract deleted successfully!")
+                        # Clear session state if this was the active contract
+                        state = get_session_state()
+                        if state.contract_id == picked_id:
+                            reset_contract_state()
+                            update_session_state(
+                                contract_id=None,
+                                qa_chain=None,
+                                entities=[]
+                            )
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.sidebar.error("Failed to delete contract")
+                except Exception as e:
+                    logger.error(f"Error deleting contract: {e}", exc_info=True)
+                    st.sidebar.error(f"Error deleting contract: {e}")
 
         # Auto-load when selection changes
         state = get_session_state()
@@ -334,15 +389,27 @@ def render_main_content():
     with main_col:
         st.header("Upload Your Contract")
         
-        # OCR checkbox
+        # Processing options checkboxes
         state = get_session_state()
-        st.checkbox(
-            "Use OCR",
-            value=state.use_ocr,
-            help="Check this box to use OCR (PaddleOCR) for text extraction. Uncheck to use PyPDF for faster processing of text-based PDFs.",
-            key="ocr_checkbox",
-            on_change=handle_ocr_change,
-        )
+        col1, col2, _ = st.columns([1, 1, 3])
+        
+        with col1:
+            st.checkbox(
+                "Use OCR",
+                value=state.use_ocr,
+                help="Check this box to use OCR (PaddleOCR) for text extraction. Uncheck to use PyPDF for faster processing of text-based PDFs.",
+                key="ocr_checkbox",
+                on_change=handle_ocr_change,
+            )
+        
+        with col2:
+            st.checkbox(
+                "Reprocess if exists",
+                value=state.reprocess_existing,
+                help="If checked, will delete and reprocess existing contracts. If unchecked, will load from cache.",
+                key="reprocess_checkbox",
+                on_change=handle_reprocess_change,
+            )
         
         uploaded_file = st.file_uploader(
             "Upload a PDF contract to begin analysis.", type="pdf"
@@ -395,6 +462,14 @@ def render_main_content():
                         # Prepare source documents for logging and display
                         source_documents = response.get("source_documents", [])
                         source_documents_for_log = "\n---\n".join([doc.page_content for doc in source_documents])
+                        
+                        # Debug: Log retrieved document metadata
+                        for i, doc in enumerate(source_documents):
+                            logger.info(
+                                f"Retrieved doc {i+1}: page={doc.metadata.get('page_number')}, "
+                                f"contract_id={doc.metadata.get('contract_id')}, "
+                                f"chunk_id={doc.metadata.get('chunk_id', 'N/A')[:16]}..."
+                            )
                     
                     # Append the full assistant message with context for feedback
                     add_message(

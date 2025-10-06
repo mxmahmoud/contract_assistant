@@ -295,3 +295,52 @@ def load_contract_entities(contract_id: str) -> List[Dict[str, Any]]:
         return []
 
 
+def delete_contract(contract_id: str, delete_from_vectorstore: bool = True) -> bool:
+    """
+    Delete a contract and all its associated data.
+    
+    Args:
+        contract_id: Contract identifier
+        delete_from_vectorstore: Whether to also delete from vector store (default: True)
+        
+    Returns:
+        True if deletion was successful, False otherwise
+        
+    Raises:
+        ValidationError: If contract ID is invalid
+        RegistryError: If deletion fails
+    """
+    logger.info(f"Deleting contract {contract_id}")
+    
+    try:
+        _validate_contract_id(contract_id)
+        
+        contract_dir = _contract_dir(contract_id)
+        
+        if not contract_dir.exists():
+            logger.warning(f"Contract directory does not exist: {contract_dir}")
+            return False
+        
+        # Delete from vector store first (if requested)
+        if delete_from_vectorstore:
+            try:
+                from ca_core.vectorstore import delete_contract_from_vector_store
+                deleted_chunks = delete_contract_from_vector_store(contract_id)
+                logger.info(f"Deleted {deleted_chunks} chunks from vector store for contract {contract_id}")
+            except Exception as e:
+                logger.error(f"Failed to delete from vector store: {e}", exc_info=True)
+                # Continue with file deletion even if vector store deletion fails
+        
+        # Delete contract directory and all files
+        shutil.rmtree(contract_dir)
+        logger.info(f"Successfully deleted contract {contract_id} from filesystem")
+        
+        return True
+        
+    except ValidationError:
+        raise  # Re-raise validation errors
+    except Exception as e:
+        logger.error(f"Failed to delete contract {contract_id}: {e}", exc_info=True)
+        raise RegistryError(f"Failed to delete contract: {e}") from e
+
+

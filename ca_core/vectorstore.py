@@ -80,7 +80,8 @@ def get_vector_store_retriever(contract_id: Optional[str] = None) -> VectorStore
     
     search_kwargs = {"k": settings.RETRIEVER_K}
     if contract_id:
-        search_kwargs["filter"] = {"contract_id": contract_id}
+        # ChromaDB filter syntax: use explicit equality operator
+        search_kwargs["filter"] = {"contract_id": {"$eq": contract_id}}
         logger.info(f"Retriever configured with filter: contract_id={contract_id}, k={settings.RETRIEVER_K}")
     else:
         logger.info(f"Retriever configured without filter, k={settings.RETRIEVER_K}")
@@ -137,5 +138,42 @@ def add_chunks_to_vector_store(chunks: List[Document]):
         
     except Exception as e:
         error_msg = f"Failed to add chunks to vector store: {e}"
+        logger.error(error_msg, exc_info=True)
+        raise VectorStoreError(error_msg) from e
+
+
+def delete_contract_from_vector_store(contract_id: str) -> int:
+    """
+    Delete all chunks for a specific contract from the vector store.
+    
+    Args:
+        contract_id: The ID of the contract to delete
+        
+    Returns:
+        Number of chunks deleted
+        
+    Raises:
+        VectorStoreError: If deletion fails
+    """
+    try:
+        db = get_chroma_db()
+        
+        # Query for all chunks with this contract_id
+        results = db._collection.get(
+            where={"contract_id": {"$eq": contract_id}}
+        )
+        
+        if not results or not results.get("ids"):
+            logger.info(f"No chunks found for contract_id={contract_id}")
+            return 0
+        
+        chunk_ids = results["ids"]
+        db._collection.delete(ids=chunk_ids)
+        
+        logger.info(f"Deleted {len(chunk_ids)} chunks for contract_id={contract_id}")
+        return len(chunk_ids)
+        
+    except Exception as e:
+        error_msg = f"Failed to delete chunks for contract {contract_id}: {e}"
         logger.error(error_msg, exc_info=True)
         raise VectorStoreError(error_msg) from e

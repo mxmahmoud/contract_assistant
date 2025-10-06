@@ -26,7 +26,6 @@ def _get_paddleocr_strategy():
 @dataclass
 class ExtractionConfig:
     strategy: str = "auto"  # 'auto' | 'paddleocr' | 'pypdf2'
-    force_ocr: bool = False
     ocr_lang: Any = None
     render_dpi: int = 200
     max_pages: Optional[int] = None
@@ -73,7 +72,16 @@ class ExtractionService:
                 
         return self._strategies[name]
 
+    def _is_paddleocr_available(self) -> bool:
+        """Check if PaddleOCR is available for import."""
+        try:
+            import paddleocr
+            return True
+        except ImportError:
+            return False
+    
     def _is_text_extraction_reasonable(self, pages: List[Dict[str, Any]]) -> bool:
+        """Check if text extraction from pypdf2 produced reasonable results."""
         if not pages:
             return False
         lengths = [len(p.get("text", "").strip()) for p in pages]
@@ -99,27 +107,49 @@ class ExtractionService:
         cfg = self.extraction_config
 
         try:
-            if cfg.force_ocr:
-                self.logger.info(f"Forcing OCR extraction for {pdf_path}")
+            # Strategy: paddleocr - use OCR directly
+            if cfg.strategy == "paddleocr":
+                self.logger.info(f"Using PaddleOCR extraction for {pdf_path}")
                 strategy = self._make_strategy("paddleocr")
                 return strategy.extract(pdf_path, max_pages=cfg.max_pages, lang=lang)
 
+            # Strategy: pypdf2 - use text extraction directly
+            if cfg.strategy == "pypdf2":
+                self.logger.info(f"Using PyPDF2 extraction for {pdf_path}")
+                strategy = self._make_strategy("pypdf2")
+                return strategy.extract(pdf_path, max_pages=cfg.max_pages, lang=lang)
+
+            # Strategy: auto - try pypdf2, fall back to paddleocr if available and needed
             if cfg.strategy == "auto":
                 self.logger.info(f"Using auto-detection for {pdf_path}")
+                
+                # First, try pypdf2
                 try:
                     text_strategy = self._make_strategy("pypdf2")
                     pages = text_strategy.extract(pdf_path, max_pages=cfg.max_pages, lang=lang)
-                    if self._is_text_extraction_reasonable(pages):
-                        self.logger.info("Text extraction successful")
-                        return pages
-                except Exception as e:
-                    self.logger.warning(f"Text extraction failed, falling back to OCR: {e}")
                     
-                ocr_strategy = self._make_strategy("paddleocr")
-                return ocr_strategy.extract(pdf_path, max_pages=cfg.max_pages, lang=lang)
-
-            strategy = self._make_strategy(cfg.strategy)
-            return strategy.extract(pdf_path, max_pages=cfg.max_pages, lang=lang)
+                    if self._is_text_extraction_reasonable(pages):
+                        self.logger.info("PyPDF2 extraction successful")
+                        return pages
+                    
+                    # Text extraction was poor, check if we can use OCR
+                    self.logger.info("PyPDF2 extraction produced poor results")
+                    
+                except Exception as e:
+                    self.logger.warning(f"PyPDF2 extraction failed: {e}")
+                
+                # Fall back to PaddleOCR if available
+                if self._is_paddleocr_available():
+                    self.logger.info("Falling back to PaddleOCR")
+                    ocr_strategy = self._make_strategy("paddleocr")
+                    return ocr_strategy.extract(pdf_path, max_pages=cfg.max_pages, lang=lang)
+                else:
+                    self.logger.warning("PaddleOCR is not available, returning pypdf2 results")
+                    # Return whatever we got from pypdf2, even if poor quality
+                    return pages if 'pages' in locals() else []
+            
+            # Unknown strategy
+            raise ExtractionError(f"Unknown extraction strategy: {cfg.strategy}")
             
         except ExtractionError:
             raise  # Re-raise extraction errors
@@ -132,7 +162,6 @@ def extract_text_from_pdf(
     pdf_path: str,
     *,
     strategy: str = "auto",
-    force_ocr: bool = False,
     ocr_lang: Any = "en",
     render_dpi: int = 200,
     max_pages: Optional[int] = None,
@@ -143,7 +172,9 @@ def extract_text_from_pdf(
     Args:
         pdf_path: Path to the PDF file
         strategy: Extraction strategy ('auto', 'pypdf2', or 'paddleocr')
-        force_ocr: Force OCR extraction even for text-based PDFs
+                  - 'auto': Try pypdf2, fall back to paddleocr if available and needed
+                  - 'pypdf2': Use PyPDF2 text extraction only
+                  - 'paddleocr': Use PaddleOCR (OCR) only
         ocr_lang: Language code for OCR
         render_dpi: DPI for PDF rendering (if needed)
         max_pages: Maximum number of pages to extract
@@ -154,11 +185,10 @@ def extract_text_from_pdf(
     Raises:
         ExtractionError: If extraction fails
     """
-    logger.info(f"Starting extraction for '{pdf_path}' with strategy='{strategy}', force_ocr={force_ocr}")
+    logger.info(f"Starting extraction for '{pdf_path}' with strategy='{strategy}'")
     
     config = ExtractionConfig(
         strategy=strategy,
-        force_ocr=force_ocr,
         ocr_lang=ocr_lang,
         render_dpi=render_dpi,
         max_pages=max_pages,

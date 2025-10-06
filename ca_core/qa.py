@@ -121,6 +121,7 @@ def get_qa_chain(retriever: VectorStoreRetriever) -> RetrievalQA:
         retriever=retriever,
         chain_type_kwargs=chain_type_kwargs,
         return_source_documents=True,
+        verbose=True,  # Enable verbose logging to see retrieved documents
     )
     
     logger.info("QA chain initialized successfully")

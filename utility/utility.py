@@ -28,7 +28,7 @@ def save_flattened_pdf(pdf: bytes | Path, target_path: Path):
             except Exception:
                 pass
             values[name] = v
-
+    print(f"Values: {values}")
     if values:
         writer.update_page_form_field_values(
             page=None, fields=values, auto_regenerate=False, flatten=True
